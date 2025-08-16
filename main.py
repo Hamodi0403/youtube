@@ -480,6 +480,7 @@ async def stop_youtube_chat(ctx):
         description="تم إيقاف نقل الرسائل",
         color=0xffa500
     )
+    embed.set_footer(text="© 2025 Ahmed Magdy", icon_url="https://cdn.discordapp.com/emojis/741243683501817978.png")
     await ctx.send(embed=embed)
 
 @bot.command(name='status')
@@ -495,28 +496,33 @@ async def status(ctx):
     if active_count > 0:
         channels = [f"<#{channel_id}>" for channel_id in active_chats.keys()]
         embed.add_field(name="📍 الرومات النشطة", value="\n".join(channels), inline=False)
+    embed.set_footer(text="© 2025 Ahmed Magdy", icon_url="https://cdn.discordapp.com/emojis/741243683501817978.png")
     await ctx.send(embed=embed)
 
 @bot.command(name='commands')
 async def commands_help(ctx):
     embed = discord.Embed(
         title="🎬 YouTube Live Chat Bot - المساعدة",
-        description="بوت تنظيم رسايل اللايف بفلترة قوية + لوجز",
+        description="بوت تنظيم رسايل اللايف بتقنية بسيطة وسلسة",
         color=0x0099ff
     )
     commands_text = """
-    `!start VIDEO_ID_or_LINK` - بدء نقل رسائل
-    `!stop` - إيقاف النقل
-    `!status` - حالة البوت
-    `!explain` - شرح جلب الـ ID
-    `!commands` - قائمة الأوامر
+    `!start VIDEO_ID_or_LINK` - بدء نقل رسائل من يوتيوب لايف
+    `!stop` - إيقاف النقل فوراً
+    `!status` - عرض تفاصيل حالة البوت
+    `!explain` - شرح ازاي تجيب الاي دي
+    `!commands` - عرض قائمة المساعدة الكاملة
     """
     embed.add_field(name="📋 الأوامر المتاحة", value=commands_text, inline=False)
-    embed.add_field(name="💡 ملاحظات", 
-                   value="• البوت يمنع السبام والرسائل المتكررة\n"
-                        "• بيعمل Rate limit 5 رسائل / 10 ثواني للشخص\n"
-                        "• أي رسالة مرفوضة بتروح للـ Logs Channel", 
+    embed.add_field(name="💡 نصائح مهمة", 
+                   value="• تأكد من أن الفيديو يحتوي على Live Chat نشط\n"
+                        "• البوت يتجنب الرسائل المتكررة والسبام تلقائياً\n"
+                        "• يمكن تشغيل شات واحد فقط لكل روم Discord\n"
+                        "• البوت يدعم الرسائل العربية والإنجليزية\n"
+                        "• 🌟 تحديث جديد : يمكنك الان استخدام لينك بدل من الاعتماد على الاي دي فقط 🌟", 
                    inline=False)
+    embed.set_footer(text="© 2025 Ahmed Magdy - جميع الحقوق محفوظة", 
+                    icon_url="https://cdn.discordapp.com/emojis/741243683501817978.png")
     await ctx.send(embed=embed)
 
 # ============================================================
