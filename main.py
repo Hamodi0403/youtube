@@ -165,16 +165,27 @@ async def monitor_youtube_chat(ctx, channel_id):
                 author_name = c.author.name
                 normalized_current = normalize(message_content)
 
-                last_msg = user_last_messages.get(author_name, "")
-                if fuzz.ratio(normalized_current, normalize(last_msg)) > 85:
+                # نخزن كل رسائل الشخص مش آخر واحدة بس
+                user_msgs = user_last_messages.get(author_name, [])
+                
+                # لو أي رسالة سابقة شبه الرسالة الحالية بنسبة > 85% → اعتبرها سبام
+                if any(fuzz.ratio(normalized_current, normalize(m)) > 85 for m in user_msgs):
                     continue
                 if any(fuzz.ratio(normalized_current, m) > 85 for m in message_history[-10:]):
                     continue
-
-                user_last_messages[author_name] = message_content
+                
+                # نضيف الرسالة الجديدة لقائمة الشخص
+                user_msgs.append(message_content)
+                
+                # نخلي الحد الأقصى لكل شخص 100 رسالة بس
+                if len(user_msgs) > 100:
+                    user_msgs = user_msgs[-100:]
+                
+                user_last_messages[author_name] = user_msgs
                 message_history.append(normalized_current)
                 if len(message_history) > 50:
                     message_history = message_history[-50:]
+
 
                 try:
                     timestamp = datetime.fromisoformat(c.datetime.replace('Z', '+00:00')) if c.datetime else datetime.now()
