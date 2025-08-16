@@ -54,20 +54,17 @@ def extract_video_id(text):
             return match.group(1)
     return text.strip()
 
-async def reconnect_youtube_chat(ctx, video_id, channel_id):
-    """محاولة إعادة الاتصال تلقائيًا"""
-    await ctx.send("🔄 إعادة الاتصال بـ YouTube Live Chat...")
+async def reconnect_youtube_chat_silent(chat_data, channel_id):
+    """
+    إعادة اتصال صامتة تكمل من آخر مكان بدون رسائل مكررة.
+    """
     try:
-        chat = pytchat.create(video_id=video_id)
-        if not chat.is_alive():
-            await ctx.send("⚠️ لا يمكن إعادة الاتصال: البث غير مباشر حالياً.")
+        old_chat = chat_data['chat']
+        if not old_chat.is_alive():
             return False
-        active_chats[channel_id] = {'chat': chat, 'running': True, 'video_id': video_id}
-        bot.loop.create_task(monitor_youtube_chat(ctx, channel_id))
-        await ctx.send("✅ تم إعادة الاتصال بنجاح!")
+        # نفس الـ object → هيحتفظ بالـ continuation
         return True
-    except Exception as e:
-        await ctx.send(f"❌ فشل إعادة الاتصال:\n```{str(e)}```")
+    except Exception:
         return False
 
 @bot.event
@@ -120,7 +117,9 @@ async def monitor_youtube_chat(ctx, channel_id):
     chat = chat_data['chat']
     video_id = chat_data['video_id']
     message_count = 0
-    ended_by_stream = False  # ← هنستخدمه عشان نعرف هل البث فعلاً انتهى
+    reconnect_attempts = 0
+    max_reconnects = 3
+    ended_by_stream = False  
 
     try:
         while chat_data.get('running', False):
@@ -128,32 +127,34 @@ async def monitor_youtube_chat(ctx, channel_id):
             try:
                 chat_data_result = await loop.run_in_executor(None, chat.get)
                 items = chat_data_result.sync_items()
-            except Exception as e:
-                print(f"⚠️ خطأ في قراءة الشات: {e} — محاولة إعادة الاتصال...")
-                # جرّب تعيد الاتصال، لو فشلت و البث مش حي -> هنعلن الإنهاء
-                try_alive = False
+                reconnect_attempts = 0
+            except Exception:
                 try:
-                    try_alive = chat.is_alive()
+                    if not chat.is_alive():
+                        ended_by_stream = True
+                        break
                 except:
                     pass
-                success = await reconnect_youtube_chat(ctx, video_id, channel_id)
-                if not success and not try_alive:
+
+                reconnect_attempts += 1
+                if reconnect_attempts > max_reconnects:
+                    ended_by_stream = True
+                    break
+
+                success = await reconnect_youtube_chat_silent(chat_data, channel_id)
+                if not success:
                     ended_by_stream = True
                     break
                 continue
 
             if not items:
-                # تحقق مضاعف قبل الإغلاق
                 await asyncio.sleep(5)
                 try:
                     if not chat.is_alive():
                         ended_by_stream = True
-                        print("⚠️ يبدو أن البث انتهى.")
                         break
                 except:
-                    # لو مش قادر نقرأ الحالة اعتبرها مؤقتة وكمل
                     pass
-                await asyncio.sleep(1)
                 continue
 
             for c in items:
@@ -162,18 +163,12 @@ async def monitor_youtube_chat(ctx, channel_id):
 
                 message_content = c.message.strip() if c.message else ""
                 author_name = c.author.name
-
                 normalized_current = normalize(message_content)
 
-                # فلترة ضد آخر رسالة من نفس الشخص
                 last_msg = user_last_messages.get(author_name, "")
                 if fuzz.ratio(normalized_current, normalize(last_msg)) > 85:
-                    print(f"❌ تجاهل رسالة مشابهة من {author_name}")
                     continue
-
-                # فلترة ضد آخر 10 رسائل عامة
                 if any(fuzz.ratio(normalized_current, m) > 85 for m in message_history[-10:]):
-                    print(f"❌ تجاهل رسالة مكررة في آخر 10 رسائل: {message_content}")
                     continue
 
                 user_last_messages[author_name] = message_content
@@ -203,21 +198,10 @@ async def monitor_youtube_chat(ctx, channel_id):
                 )
                 try:
                     await ctx.send(embed=embed)
-                    print(f"✅ تم إرسال رسالة من {c.author.name}: {c.message[:50]}...")
                     await asyncio.sleep(0.5)
-                except Exception as send_error:
-                    print(f"❌ خطأ في إرسال الرسالة: {send_error}")
+                except:
+                    pass
             await asyncio.sleep(3)
-    except Exception as e:
-        error_embed = discord.Embed(
-            title="❌ خطأ في مراقبة الشات",
-            description=f"```{str(e)}```",
-            color=0xff0000
-        )
-        try:
-            await ctx.send(embed=error_embed)
-        except:
-            pass
     finally:
         if channel_id in active_chats:
             del active_chats[channel_id]
