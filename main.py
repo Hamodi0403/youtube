@@ -9,8 +9,11 @@ import re
 from rapidfuzz import fuzz
 from collections import defaultdict, deque
 import time
+from typing import List, Tuple, Set
 
-# إعداد البوت
+# ============================================================
+#                      إعداد البوت
+# ============================================================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
@@ -23,31 +26,164 @@ ALLOWED_ROLE_ID = 1389955793520165046
 # ✅ روم اللوجز (حط هنا ID الشانل اللي انت عاوزه للـ logs)
 LOG_CHANNEL_ID = 1406224327912980480
 
-@bot.check
-async def global_check(ctx):
-    if isinstance(ctx.author, discord.Member):
-        allowed = any(role.id == ALLOWED_ROLE_ID for role in ctx.author.roles)
-        if not allowed:
-            await ctx.send("❌ ليس لديك الصلاحية لاستخدام هذا الأمر.")
-        return allowed
-    return False
-
-# متغيرات التحكم
+# ============================================================
+#                   حالة / تخزين داخلي
+# ============================================================
+# active_chats: لكل روم Discord بنخزن اوبجكت الشات + حالة التشغيل
 active_chats = {}
-message_history = []  
-user_last_messages = {}
-user_message_times = defaultdict(deque)  # rate limit tracking
 
-def normalize(text):
-    text = re.sub(r'[^\w\s]', '', text)  
-    text = re.sub(r'[ًٌٍَُِّْـ]', '', text)  
-    return text.strip().lower()
+# ملاحظات مهمة:
+# 1) تم إلغاء Global Duplicate بالكامل بناءً على طلبك.
+# 2) الاعتماد على فلترة فردية فقط (Per-User).
+# 3) إضافة طبقة Anti-cheat قوية (Token Normalization + Similarities).
+# 4) الإبقاء على نفس الأوامر ونصوصها كما هي.
 
+# أخر رسائل كل مستخدم داخل "هذا الروم" (Per-room Per-user)
+# هنخزن آخر عدد معقول لتاريخ رسائل المستخدم كي نقارن ضدها.
+# structure: user_last_messages[(guild_id, channel_id, author_name)] -> deque([...])
+user_last_messages = defaultdict(lambda: deque(maxlen=150))
+
+# Rate limit per user (5 رسائل / 10 ثواني) — نفس سلوكك القديم
+user_message_times = defaultdict(deque)  # key: (guild_id, channel_id, author_name)
+
+# ============================================================
+#                   إعدادات الفلاتر/العَتبات
+# ============================================================
+RATE_LIMIT_MAX_MSG = 5          # أقصى عدد رسائل
+RATE_LIMIT_WINDOW_SEC = 10      # خلال 10 ثواني
+
+# عتبات التشابه:
+# - نستخدم أكثر من أسلوب: token_set_ratio / token_sort_ratio + Jaccard
+# - في العربي/الإنجليزي: 92 مناسبة جدًا (زي كودك)؛ مع التطبيع بتبقى قوية ضد الاحتيال.
+THRESHOLD_TOKEN_SORT = 92
+THRESHOLD_TOKEN_SET  = 92
+THRESHOLD_JACCARD    = 0.90  # 90% تشابه في مجموعة التوكنز بعد التطبيع
+
+# ============================================================
+#                   أدوات التطبيع (Normalization)
+# ============================================================
+# هنقوّي normalize بحيث:
+# - نشيل التشكيل
+# - نشيل التطويل
+# - نوحّد الهمزات/الألف/الياء/التاء المربوطة
+# - نشيل الرموز والمسافات الزائدة
+# - نفك أي مسافات مخادعة/رموز تحكم (ZWJ/LRM/RLM ... الخ)
+# - نطبّق Lowercase للإنجليزي
+# - في الآخر نرجّع نصاً نظيفاً + قائمة توكنز Sorted للمقارنات
+
+_AR_DIACRITICS_PATTERN = re.compile(r'[\u064B-\u065F\u0610-\u061A\u06D6-\u06ED]')
+_TATWEEL_PATTERN       = re.compile(r'[\u0640]')  # ـ
+_CONTROL_CHARS_PATTERN = re.compile(
+    r'[\u200B-\u200F\u061C\u202A-\u202E\u2066-\u2069]'  # ZWSP, ZWJ, LRM/RLM, ALM, embedding marks
+)
+_PUNCT_NUM_PATTERN     = re.compile(r'[^\w\s]')  # هنسيب الأرقام والحروف فقط
+_MULTI_SPACE           = re.compile(r'\s+')
+
+# توحيد بعض الحروف العربية الشائعة
+def _arabic_unify_letters(text: str) -> str:
+    # توحيد الألف وأنواعها
+    text = re.sub(r'[إأٱآا]', 'ا', text)
+    # توحيد الياء/الألف المقصورة
+    text = re.sub(r'[يى]', 'ي', text)
+    # توحيد الهاء/التاء المربوطة (اختيارياً بنحو أفضل للتشابه)
+    text = re.sub(r'[ة]', 'ه', text)
+    # همزات على الواو/الياء -> همزة مستقلة
+    text = re.sub(r'[ؤئ]', 'ء', text)
+    return text
+
+def _normalize_repeated_letters(text: str) -> str:
+    # تقليص التكرارات المبالغ فيها بالحروف (مثلا: مهممممم -> مهم)
+    return re.sub(r'(.)\1{2,}', r'\1\1', text)  # خليه أقصى تكرار متتالي حرفين
+
+def normalize(text: str) -> str:
+    if not text:
+        return ''
+    # إزالة علامات التحكم/الكائنات غير المرئية
+    text = _CONTROL_CHARS_PATTERN.sub('', text)
+    # إزالة التشكيل
+    text = _AR_DIACRITICS_PATTERN.sub('', text)
+    # إزالة التطويل
+    text = _TATWEEL_PATTERN.sub('', text)
+    # توحيد الحروف العربية
+    text = _arabic_unify_letters(text)
+    # Lowercase للإنجليزي
+    text = text.lower()
+    # إزالة الرموز/الترقيم
+    text = _PUNCT_NUM_PATTERN.sub(' ', text)
+    # تقليص التكرارات المبالغ فيها
+    text = _normalize_repeated_letters(text)
+    # مسافات نظيفة
+    text = _MULTI_SPACE.sub(' ', text).strip()
+    return text
+
+def tokens_sorted(text: str) -> List[str]:
+    # رجّع قائمة توكنز مرتبة (لضبط مقارنات token_sort / jaccard)
+    if not text:
+        return []
+    toks = text.split()
+    toks.sort()
+    return toks
+
+def jaccard_similarity(a_tokens: List[str], b_tokens: List[str]) -> float:
+    if not a_tokens and not b_tokens:
+        return 1.0
+    A, B = set(a_tokens), set(b_tokens)
+    if not A and not B:
+        return 1.0
+    if not A or not B:
+        return 0.0
+    inter = len(A.intersection(B))
+    union = len(A.union(B))
+    return inter / union if union else 0.0
+
+def strong_semantic_similarity(a: str, b: str) -> Tuple[bool, dict]:
+    """
+    يعيد (is_similar, debug_info)
+    - يشغّل ثلاث مقاييس:
+      1) RapidFuzz token_sort_ratio
+      2) RapidFuzz token_set_ratio
+      3) Jaccard على توكنز Sorted
+    - يعتبر الرسالتين متشابهتين إذا:
+      (token_sort_ratio >= THRESHOLD_TOKEN_SORT) OR
+      (token_set_ratio  >= THRESHOLD_TOKEN_SET ) OR
+      (Jaccard >= THRESHOLD_JACCARD)
+    """
+    na, nb = normalize(a), normalize(b)
+    # لو فاضيين بعد التطبيع، اعتبرهم متشابهين (نفس الفكرة/إيموجي بس)
+    if not na and not nb:
+        return True, {'reason': 'empty_after_normalize'}
+
+    # RapidFuzz (String-level but token-aware)
+    tsort = fuzz.token_sort_ratio(na, nb)
+    tset  = fuzz.token_set_ratio(na, nb)
+
+    # Jaccard على توكنز
+    ja = tokens_sorted(na)
+    jb = tokens_sorted(nb)
+    jacc = jaccard_similarity(ja, jb)
+
+    similar = (tsort >= THRESHOLD_TOKEN_SORT) or (tset >= THRESHOLD_TOKEN_SET) or (jacc >= THRESHOLD_JACCARD)
+    info = {
+        'token_sort_ratio': tsort,
+        'token_set_ratio': tset,
+        'jaccard': round(jacc, 3),
+        'na': na,
+        'nb': nb
+    }
+    return similar, info
+
+# ============================================================
+#               أدوات العرض / إصلاح نص مختلط RTL/LTR
+# ============================================================
 def fix_mixed_text(text):
+    # لو النص فيه عربي وإنجليزي سوا، نزود RLE/PDF عشان يبان صح في ديسكورد
     if re.search(r'[\u0600-\u06FF]', text) and re.search(r'[a-zA-Z]', text):
         return '\u202B' + text + '\u202C'
     return text
 
+# ============================================================
+#              استخراج Video ID من الرابط/النص
+# ============================================================
 def extract_video_id(text):
     patterns = [
         r'(?:v=|\/)([0-9A-Za-z_-]{11})(?:[&?]|\s|$)',
@@ -60,21 +196,45 @@ def extract_video_id(text):
             return match.group(1)
     return text.strip()
 
-async def log_message(ctx, reason, author_name, content):
+# ============================================================
+#                 لوج الرسائل المرفوضة
+# ============================================================
+async def log_message(ctx, reason, author_name, content, extra: dict = None):
     """إرسال رسالة مرفوضة للـ logs channel"""
     log_channel = bot.get_channel(LOG_CHANNEL_ID)
     if not log_channel:
         return
+    desc = f"👤 **{author_name}**\n"
+    if content:
+        desc += f"💬 {content[:600]}"
     embed = discord.Embed(
         title=f"🚫 رسالة تم رفضها ({reason})",
-        description=f"👤 **{author_name}**\n💬 {content[:300]}",
+        description=desc,
         color=0xff5555,
         timestamp=datetime.now()
     )
+    if extra:
+        # إضافة بعض الديباج المفيد باختصار
+        details = []
+        if 'token_sort_ratio' in extra: details.append(f"token_sort: {extra['token_sort_ratio']}")
+        if 'token_set_ratio'  in extra: details.append(f"token_set: {extra['token_set_ratio']}")
+        if 'jaccard'          in extra: details.append(f"jaccard: {extra['jaccard']}")
+        if details:
+            embed.add_field(name="Similarity", value=", ".join(str(x) for x in details), inline=False)
     embed.set_footer(text="📺 YouTube Chat Logger")
-    await log_channel.send(embed=embed)
+    try:
+        await log_channel.send(embed=embed)
+    except:
+        pass
 
+# ============================================================
+#           إعادة اتصال صامتة (لو حصل مشاكل مؤقتة)
+# ============================================================
 async def reconnect_youtube_chat_silent(chat_data, channel_id):
+    """
+    إعادة اتصال صامتة تكمل من آخر مكان بدون رسائل مكررة.
+    في pytchat، لو الـ object لسه حي، غالبًا هيكمل بـ continuation.
+    """
     try:
         old_chat = chat_data['chat']
         if not old_chat.is_alive():
@@ -82,6 +242,18 @@ async def reconnect_youtube_chat_silent(chat_data, channel_id):
         return True
     except Exception:
         return False
+
+# ============================================================
+#           أحداث ديسكورد + أوامر (بدون تغيير النصوص)
+# ============================================================
+@bot.check
+async def global_check(ctx):
+    if isinstance(ctx.author, discord.Member):
+        allowed = any(role.id == ALLOWED_ROLE_ID for role in ctx.author.roles)
+        if not allowed:
+            await ctx.send("❌ ليس لديك الصلاحية لاستخدام هذا الأمر.")
+        return allowed
+    return False
 
 @bot.event
 async def on_ready():
@@ -147,8 +319,17 @@ async def start_youtube_chat(ctx, video_id: str = None):
     except Exception as e:
         await ctx.send(f'❌ خطأ:\n```{str(e)}```')
 
+# ============================================================
+#                 قلب الفلترة داخل المراقبة
+# ============================================================
 async def monitor_youtube_chat(ctx, channel_id):
-    global message_history, user_last_messages
+    """
+    - بدون Global Duplicate
+    - فلترة فردية فقط
+    - Anti-cheat: token normalization + similarities قوية
+    - Rate limit لكل مستخدم
+    - Logs لكل رسالة مرفوضة
+    """
     chat_data = active_chats.get(channel_id)
     if not chat_data:
         return
@@ -158,7 +339,7 @@ async def monitor_youtube_chat(ctx, channel_id):
     message_count = 0
     reconnect_attempts = 0
     max_reconnects = 3
-    ended_by_stream = False  
+    ended_by_stream = False
 
     try:
         while chat_data.get('running', False):
@@ -198,65 +379,82 @@ async def monitor_youtube_chat(ctx, channel_id):
                 if not chat_data.get('running', False):
                     break
 
-                message_content = c.message.strip() if c.message else ""
+                message_content_raw = c.message if c.message else ""
+                message_content = message_content_raw.strip()
                 author_name = c.author.name
-                normalized_current = normalize(message_content)
 
-                # Rate limit: 5 رسائل / 10 ثواني
+                # ----- Rate Limit (Per-User) -----
+                key = (ctx.guild.id if ctx.guild else 0, ctx.channel.id, author_name)
                 now = time.time()
-                times = user_message_times[author_name]
+                times = user_message_times[key]
                 times.append(now)
-                while times and now - times[0] > 10:
+                while times and now - times[0] > RATE_LIMIT_WINDOW_SEC:
                     times.popleft()
-                if len(times) > 5:
+                if len(times) > RATE_LIMIT_MAX_MSG:
+                    # تخطى المعدل — نسجّل ونتجاهل
                     await log_message(ctx, "Rate Limit", author_name, message_content)
                     continue
 
-                # Anti-spam similarity
-                user_msgs = user_last_messages.get(author_name, [])
-                if any(fuzz.ratio(normalized_current, normalize(m)) > 92 for m in user_msgs):
-                    await log_message(ctx, "Similar Spam", author_name, message_content)
+                # ----- Anti-cheat (Per-User Similarity) -----
+                # نجيب آخر رسائل الشخص في نفس الروم
+                past_msgs: deque = user_last_messages[key]
+                is_spam_similar = False
+                debug_info = None
+
+                # نقارن ضد عيّنة معقولة (مثلا آخر 60-80 رسالة من الـ 150)
+                # عشان الأداء، نكتفي بآخر 80
+                compare_sample = list(past_msgs)[-80:] if len(past_msgs) > 80 else list(past_msgs)
+
+                for prev in reversed(compare_sample):
+                    similar, info = strong_semantic_similarity(message_content, prev)
+                    if similar:
+                        is_spam_similar = True
+                        debug_info = info
+                        break
+
+                if is_spam_similar:
+                    await log_message(ctx, "Similar Spam (Per-User)", author_name, message_content, debug_info)
+                    # لا تُضيف الرسالة لقائمة تاريخ المستخدم لأنها مرفوضة
                     continue
-                if any(fuzz.ratio(normalized_current, m) > 92 for m in message_history[-10:]):
-                    await log_message(ctx, "Duplicate Global", author_name, message_content)
-                    continue
 
-                # Update history
-                user_msgs.append(message_content)
-                if len(user_msgs) > 100:
-                    user_msgs = user_msgs[-100:]
-                user_last_messages[author_name] = user_msgs
+                # لو مش سبام: خزّن الرسالة في تاريخ المستخدم (Per-User)
+                past_msgs.append(message_content)
 
-                message_history.append(normalized_current)
-                if len(message_history) > 50:
-                    message_history = message_history[-50:]
-
+                # ----- تجهيز العرض وإرساله إلى روم الديسكورد -----
                 try:
-                    timestamp = datetime.fromisoformat(c.datetime.replace('Z', '+00:00')) if c.datetime else datetime.now()
-                except:
-                    timestamp = datetime.now()
+                    try:
+                        timestamp = datetime.fromisoformat(c.datetime.replace('Z', '+00:00')) if c.datetime else datetime.now()
+                    except:
+                        timestamp = datetime.now()
 
-                msg_display = message_content[:800] + "..." if len(message_content) > 800 else message_content or "*رسالة فارغة أو ايموجي*"
+                    msg_display = (
+                        message_content[:800] + "..."
+                        if len(message_content) > 800
+                        else (message_content or "*رسالة فارغة أو ايموجي*")
+                    )
 
-                embed = discord.Embed(
-                    title="🎬 **YouTube Live Chat**",
-                    description=f"### 👤 **{c.author.name}**\n\n### 💬 {fix_mixed_text(msg_display)}",
-                    color=0xff0000,
-                    timestamp=timestamp
-                )
-                if hasattr(c.author, 'imageUrl') and c.author.imageUrl:
-                    embed.set_thumbnail(url=c.author.imageUrl)
-                message_count += 1
-                embed.set_footer(
-                    text=f"📺 YouTube Live Chat • رسالة #{message_count}",
-                    icon_url="https://upload.wikimedia.org/wikipedia/commons/4/42/YouTube_icon_%282013-2017%29.png"
-                )
-                try:
+                    embed = discord.Embed(
+                        title="🎬 **YouTube Live Chat**",
+                        description=f"### 👤 **{c.author.name}**\n\n### 💬 {fix_mixed_text(msg_display)}",
+                        color=0xff0000,
+                        timestamp=timestamp
+                    )
+                    if hasattr(c.author, 'imageUrl') and c.author.imageUrl:
+                        embed.set_thumbnail(url=c.author.imageUrl)
+                    message_count += 1
+                    embed.set_footer(
+                        text=f"📺 YouTube Live Chat • رسالة #{message_count}",
+                        icon_url="https://upload.wikimedia.org/wikipedia/commons/4/42/YouTube_icon_%282013-2017%29.png"
+                    )
                     await ctx.send(embed=embed)
                     await asyncio.sleep(0.5)
-                except:
+                except Exception:
+                    # لو حصلت مشكلة أثناء الإرسال، نكمل الحلقة بدون كراس
                     pass
+
+            # تهدئة بسيطة بين اللوبات
             await asyncio.sleep(3)
+
     finally:
         if channel_id in active_chats:
             del active_chats[channel_id]
@@ -266,6 +464,9 @@ async def monitor_youtube_chat(ctx, channel_id):
             except:
                 pass
 
+# ============================================================
+#                 بقية الأوامر — بدون تغيير
+# ============================================================
 @bot.command(name='stop')
 async def stop_youtube_chat(ctx):
     channel_id = ctx.channel.id
@@ -318,6 +519,9 @@ async def commands_help(ctx):
                    inline=False)
     await ctx.send(embed=embed)
 
+# ============================================================
+#                 نقطة التشغيل
+# ============================================================
 async def main():
     keep_alive()
     token = os.getenv('DISCORD_TOKEN')
