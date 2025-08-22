@@ -349,16 +349,29 @@ async def monitor_youtube_chat(ctx, channel_id):
                 items = chat_data_result.sync_items()
                 reconnect_attempts = 0
             except Exception:
+                # تأكيد مزدوج قبل إعلان انتهاء البث
                 try:
                     if not chat.is_alive():
-                        ended_by_stream = True
-                        break
+                        await asyncio.sleep(25)  # مهلة بسيطة
+                        try:
+                            test_data = await loop.run_in_executor(None, chat.get)
+                            test_items = test_data.sync_items()
+                        except:
+                            test_items = []
+                        if not test_items:
+                            ended_by_stream = True
+                            break
+                        else:
+                            # لسه في رسائل → نكمل
+                            continue
                 except:
                     pass
+            
                 reconnect_attempts += 1
                 if reconnect_attempts > max_reconnects:
                     ended_by_stream = True
                     break
+            
                 success = await reconnect_youtube_chat_silent(chat_data, channel_id)
                 if not success:
                     ended_by_stream = True
@@ -367,10 +380,21 @@ async def monitor_youtube_chat(ctx, channel_id):
 
             if not items:
                 await asyncio.sleep(5)
+                # تأكيد مزدوج قبل إعلان الانتهاء
                 try:
                     if not chat.is_alive():
-                        ended_by_stream = True
-                        break
+                        await asyncio.sleep(25)
+                        try:
+                            test_data = await loop.run_in_executor(None, chat.get)
+                            test_items = test_data.sync_items()
+                        except:
+                            test_items = []
+                        if not test_items:
+                            ended_by_stream = True
+                            break
+                        else:
+                            # فيه رسائل رجعت بعد المهلة → كمل
+                            continue
                 except:
                     pass
                 continue
