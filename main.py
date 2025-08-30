@@ -324,11 +324,8 @@ async def start_youtube_chat(ctx, video_id: str = None):
 # ============================================================
 async def monitor_youtube_chat(ctx, channel_id):
     """
-    - بدون Global Duplicate
-    - فلترة فردية فقط
-    - Anti-cheat: token normalization + similarities قوية
-    - Rate limit لكل مستخدم
-    - Logs لكل رسالة مرفوضة
+    مراقبة الشات مع نظام إعادة اتصال ذكي وتأكيد مزدوج قبل إعلان انتهاء البث.
+    يحافظ على منطق الفلترة كما هو (Per-User, rate limit, similarity).
     """
     chat_data = active_chats.get(channel_id)
     if not chat_data:
@@ -341,62 +338,100 @@ async def monitor_youtube_chat(ctx, channel_id):
     max_reconnects = 3
     ended_by_stream = False
 
+    # ضبط القيم الخاصة بعملية التأكيد / إعادة الإنشاء
+    PROBE_ATTEMPTS = 4        # عدد محاولات probe السريعة للتأكد من وجود رسائل
+    PROBE_SLEEP_SEC = 5       # بين كل محاولة probe
+    RECREATE_ATTEMPTS = 3     # عدد محاولات إعادة إنشاء كائن pytchat
+    RECREATE_SLEEP_SEC = 5
+
     try:
         while chat_data.get('running', False):
             loop = asyncio.get_event_loop()
+            items = None
             try:
+                # محاولة القراءة العادية
                 chat_data_result = await loop.run_in_executor(None, chat.get)
                 items = chat_data_result.sync_items()
                 reconnect_attempts = 0
             except Exception:
-                # تأكيد مزدوج قبل إعلان انتهاء البث
-                try:
-                    if not chat.is_alive():
-                        await asyncio.sleep(25)  # مهلة بسيطة
-                        try:
-                            test_data = await loop.run_in_executor(None, chat.get)
-                            test_items = test_data.sync_items()
-                        except:
-                            test_items = []
-                        if not test_items:
-                            ended_by_stream = True
+                # قراءة فشلت مؤقتاً -> probe سريع للتأكد إن المشكلة مؤقتة
+                probe_found = False
+                for _ in range(PROBE_ATTEMPTS):
+                    await asyncio.sleep(PROBE_SLEEP_SEC)
+                    try:
+                        probe = await loop.run_in_executor(None, chat.get)
+                        probe_items = probe.sync_items()
+                        if probe_items:
+                            items = probe_items
+                            probe_found = True
                             break
-                        else:
-                            # لسه في رسائل → نكمل
-                            continue
-                except:
-                    pass
-            
-                reconnect_attempts += 1
-                if reconnect_attempts > max_reconnects:
-                    ended_by_stream = True
-                    break
-            
-                success = await reconnect_youtube_chat_silent(chat_data, channel_id)
-                if not success:
-                    ended_by_stream = True
-                    break
-                continue
+                    except:
+                        # تجاهل الأخطاء المؤقتة خلال الـ probe
+                        continue
 
-            if not items:
-                await asyncio.sleep(5)
-                # تأكيد مزدوج قبل إعلان الانتهاء
-                try:
-                    if not chat.is_alive():
-                        await asyncio.sleep(25)
+                if not probe_found:
+                    # لو الـ probe مافيش ، نجرب نُعيد إنشاء كائن chat جديد (silent)
+                    recreated = False
+                    for _ in range(RECREATE_ATTEMPTS):
                         try:
-                            test_data = await loop.run_in_executor(None, chat.get)
-                            test_items = test_data.sync_items()
+                            new_chat = pytchat.create(video_id=video_id)
+                            if new_chat and new_chat.is_alive():
+                                # استبدال الكائن القديم بالجديد وواصلة العمل
+                                chat = new_chat
+                                chat_data['chat'] = new_chat
+                                recreated = True
+                                break
                         except:
-                            test_items = []
-                        if not test_items:
-                            ended_by_stream = True
+                            pass
+                        await asyncio.sleep(RECREATE_SLEEP_SEC)
+
+                    if not recreated and not probe_found:
+                        # لم نجده بعد كل المحاولات -> اعتبر البث انتهى
+                        ended_by_stream = True
+                        break
+                    # لو اعادة الإنشاء نجحت أو probe عادت برسائل، نكمل الحلقة لمعالجة `items`
+            # نهاية try/except القراءة
+
+            # لو ما فيش عناصر (items) بعد كل محاولات الـ probe/recreate -> تأكيد الانتهاء
+            if not items:
+                # probe ثانية مع نفس المنطق لتأكيد أن البث انتهى فعلاً
+                probe_found = False
+                for _ in range(PROBE_ATTEMPTS):
+                    await asyncio.sleep(PROBE_SLEEP_SEC)
+                    try:
+                        probe = await loop.run_in_executor(None, chat.get)
+                        probe_items = probe.sync_items()
+                        if probe_items:
+                            items = probe_items
+                            probe_found = True
                             break
-                        else:
-                            # فيه رسائل رجعت بعد المهلة → كمل
-                            continue
-                except:
-                    pass
+                    except:
+                        continue
+
+                if not probe_found:
+                    # حاول إعادة إنشاء مرة أخرى قبل الاستسلام
+                    recreated = False
+                    for _ in range(RECREATE_ATTEMPTS):
+                        try:
+                            new_chat = pytchat.create(video_id=video_id)
+                            if new_chat and new_chat.is_alive():
+                                chat = new_chat
+                                chat_data['chat'] = new_chat
+                                recreated = True
+                                break
+                        except:
+                            pass
+                        await asyncio.sleep(RECREATE_SLEEP_SEC)
+
+                    if not recreated and not probe_found:
+                        ended_by_stream = True
+                        break
+                    # وإلا: لو recreated نجح أو probe وجد رسائل → نتابع
+
+            # الآن لدينا items (قابلة للمعالجة) أو تم إعادة الإنشاء → تعامل مع العناصر
+            if not items:
+                # لا يوجد شيء للمعالجة هذه الدورة، نكمل للوب التالي
+                await asyncio.sleep(1)
                 continue
 
             for c in items:
@@ -420,13 +455,10 @@ async def monitor_youtube_chat(ctx, channel_id):
                     continue
 
                 # ----- Anti-cheat (Per-User Similarity) -----
-                # نجيب آخر رسائل الشخص في نفس الروم
                 past_msgs: deque = user_last_messages[key]
                 is_spam_similar = False
                 debug_info = None
 
-                # نقارن ضد عيّنة معقولة (مثلا آخر 60-80 رسالة من الـ 150)
-                # عشان الأداء، نكتفي بآخر 80
                 compare_sample = list(past_msgs)[-80:] if len(past_msgs) > 80 else list(past_msgs)
 
                 for prev in reversed(compare_sample):
@@ -438,7 +470,6 @@ async def monitor_youtube_chat(ctx, channel_id):
 
                 if is_spam_similar:
                     await log_message(ctx, "Similar Spam (Per-User)", author_name, message_content, debug_info)
-                    # لا تُضيف الرسالة لقائمة تاريخ المستخدم لأنها مرفوضة
                     continue
 
                 # لو مش سبام: خزّن الرسالة في تاريخ المستخدم (Per-User)
@@ -482,6 +513,7 @@ async def monitor_youtube_chat(ctx, channel_id):
     finally:
         if channel_id in active_chats:
             del active_chats[channel_id]
+        # نرسل رسالة الانهاء مرة واحدة لو تأكدنا من انتهاء البث
         if ended_by_stream:
             try:
                 await ctx.send("# 📴 **تم إيقاف البوت تلقائيًا لأن البث انتهى.**")
