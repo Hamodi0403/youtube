@@ -344,6 +344,10 @@ async def monitor_youtube_chat(ctx, channel_id):
     RECREATE_ATTEMPTS = 3     # عدد محاولات إعادة إنشاء كائن pytchat
     RECREATE_SLEEP_SEC = 5
 
+    # ----------- تعديل: إضافة تايم آوت نهائي -----------
+    last_message_time = time.time()
+    MAX_NO_MESSAGE_SECONDS = 480  # توقف تلقائي إذا لم تصل أي رسالة خلال 8 دقائق
+
     try:
         while chat_data.get('running', False):
             loop = asyncio.get_event_loop()
@@ -428,10 +432,14 @@ async def monitor_youtube_chat(ctx, channel_id):
                         break
                     # وإلا: لو recreated نجح أو probe وجد رسائل → نتابع
 
-            # الآن لدينا items (قابلة للمعالجة) أو تم إعادة الإنشاء → تعامل مع العناصر
+            # ----------- تعديل: تحقق من التايم آوت النهائي لو لم توجد رسائل -----------
             if not items:
                 # لا يوجد شيء للمعالجة هذه الدورة، نكمل للوب التالي
                 await asyncio.sleep(1)
+                # تحقق من التايم آوت النهائي
+                if time.time() - last_message_time > MAX_NO_MESSAGE_SECONDS:
+                    ended_by_stream = True
+                    break
                 continue
 
             for c in items:
@@ -507,8 +515,15 @@ async def monitor_youtube_chat(ctx, channel_id):
                     # لو حصلت مشكلة أثناء الإرسال، نكمل الحلقة بدون كراس
                     pass
 
+                # ----------- تحديث وقت آخر رسالة -----------
+                last_message_time = time.time()
+
             # تهدئة بسيطة بين اللوبات
             await asyncio.sleep(3)
+            # ----------- تحقق من التايم آوت النهائي بعد كل لفة -----------
+            if time.time() - last_message_time > MAX_NO_MESSAGE_SECONDS:
+                ended_by_stream = True
+                break
 
     finally:
         if channel_id in active_chats:
@@ -516,7 +531,7 @@ async def monitor_youtube_chat(ctx, channel_id):
         # نرسل رسالة الانهاء مرة واحدة لو تأكدنا من انتهاء البث
         if ended_by_stream:
             try:
-                await ctx.send("# 📴 **تم إيقاف البوت تلقائيًا لأن البث انتهى.**")
+                await ctx.send("# 📴 **تم إيقاف البوت تلقائيًا لأن البث انتهى أو لم تصل أي رسالة لفترة طويلة.**")
             except:
                 pass
 
