@@ -196,14 +196,23 @@ def extract_video_id(text):
             return match.group(1)
     return text.strip()
 
+
 # ============================================================
 #                 لوج الرسائل المرفوضة
 # ============================================================
+log_message_counts = defaultdict(int)  # NEW
+
 async def log_message(ctx, reason, author_name, content, extra: dict = None):
-    """إرسال رسالة مرفوضة للـ logs channel"""
+    """إرسال رسالة مرفوضة للـ logs channel مع ترقيم الرسائل"""
     log_channel = bot.get_channel(LOG_CHANNEL_ID)
     if not log_channel:
         return
+
+    # --- زيادة العداد ---
+    channel_id = ctx.channel.id if ctx and hasattr(ctx, 'channel') else LOG_CHANNEL_ID
+    log_message_counts[channel_id] += 1
+    log_count = log_message_counts[channel_id]
+
     desc = f"👤 **{author_name}**\n"
     if content:
         desc += f"💬 {content[:600]}"
@@ -214,14 +223,14 @@ async def log_message(ctx, reason, author_name, content, extra: dict = None):
         timestamp=datetime.now()
     )
     if extra:
-        # إضافة بعض الديباج المفيد باختصار
         details = []
         if 'token_sort_ratio' in extra: details.append(f"token_sort: {extra['token_sort_ratio']}")
         if 'token_set_ratio'  in extra: details.append(f"token_set: {extra['token_set_ratio']}")
         if 'jaccard'          in extra: details.append(f"jaccard: {extra['jaccard']}")
         if details:
             embed.add_field(name="Similarity", value=", ".join(str(x) for x in details), inline=False)
-    embed.set_footer(text="📺 YouTube Chat Logger")
+    # --- إضافة الترقيم في الفوتر ---
+    embed.set_footer(text=f"📺 YouTube Chat Logger • رسالة #{log_count}")  # NEW
     try:
         await log_channel.send(embed=embed)
     except:
