@@ -46,6 +46,12 @@ user_last_messages = defaultdict(lambda: deque(maxlen=150))
 # Rate limit per user (5 رسائل / 10 ثواني) — نفس سلوكك القديم
 user_message_times = defaultdict(deque)  # key: (guild_id, channel_id, author_name)
 
+# عداد رسائل اللوجز لكل روم (logs)
+log_message_counts = defaultdict(int)  # NEW
+
+# تخزين رقم كل رسالة مقبولة للمستخدم في كل روم
+user_message_numbers = defaultdict(dict)  # key: (guild_id, channel_id, author_name) -> dict: {message_content: message_number}
+
 # ============================================================
 #                   إعدادات الفلاتر/العَتبات
 # ============================================================
@@ -196,14 +202,11 @@ def extract_video_id(text):
             return match.group(1)
     return text.strip()
 
-
 # ============================================================
 #                 لوج الرسائل المرفوضة
 # ============================================================
-log_message_counts = defaultdict(int)  # NEW
-
 async def log_message(ctx, reason, author_name, content, extra: dict = None):
-    """إرسال رسالة مرفوضة للـ logs channel مع ترقيم الرسائل"""
+    """إرسال رسالة مرفوضة للـ logs channel مع ترقيم الرسائل ورقم الرسالة الأصلية (لو مكررة)"""
     log_channel = bot.get_channel(LOG_CHANNEL_ID)
     if not log_channel:
         return
@@ -229,8 +232,13 @@ async def log_message(ctx, reason, author_name, content, extra: dict = None):
         if 'jaccard'          in extra: details.append(f"jaccard: {extra['jaccard']}")
         if details:
             embed.add_field(name="Similarity", value=", ".join(str(x) for x in details), inline=False)
-    # --- إضافة الترقيم في الفوتر ---
-    embed.set_footer(text=f"📺 YouTube Chat Logger • رسالة #{log_count}")  # NEW
+        if 'similar_message_number' in extra and extra['similar_message_number']:
+            embed.add_field(
+                name="🔁 مكررة من رسالة رقم",
+                value=f"الرسالة الأصلية كانت رقم #{extra['similar_message_number']}",
+                inline=False
+            )
+    embed.set_footer(text=f"📺 YouTube Chat Logger • رسالة #{log_count}")
     try:
         await log_channel.send(embed=embed)
     except:
@@ -475,6 +483,7 @@ async def monitor_youtube_chat(ctx, channel_id):
                 past_msgs: deque = user_last_messages[key]
                 is_spam_similar = False
                 debug_info = None
+                similar_message_number = None
 
                 compare_sample = list(past_msgs)[-80:] if len(past_msgs) > 80 else list(past_msgs)
 
@@ -483,14 +492,24 @@ async def monitor_youtube_chat(ctx, channel_id):
                     if similar:
                         is_spam_similar = True
                         debug_info = info
+                        similar_message_number = user_message_numbers[key].get(prev)
                         break
 
                 if is_spam_similar:
-                    await log_message(ctx, "Similar Spam (Per-User)", author_name, message_content, debug_info)
+                    await log_message(
+                        ctx, 
+                        "Similar Spam (Per-User)", 
+                        author_name, 
+                        message_content, 
+                        {**(debug_info or {}), "similar_message_number": similar_message_number}
+                    )
                     continue
 
                 # لو مش سبام: خزّن الرسالة في تاريخ المستخدم (Per-User)
                 past_msgs.append(message_content)
+                # ----------- زيادة message_count وتخزين رقم الرسالة -----------
+                message_count += 1
+                user_message_numbers[key][message_content] = message_count
 
                 # ----- تجهيز العرض وإرساله إلى روم الديسكورد -----
                 try:
@@ -513,7 +532,6 @@ async def monitor_youtube_chat(ctx, channel_id):
                     )
                     if hasattr(c.author, 'imageUrl') and c.author.imageUrl:
                         embed.set_thumbnail(url=c.author.imageUrl)
-                    message_count += 1
                     embed.set_footer(
                         text=f"📺 YouTube Live Chat • رسالة #{message_count}",
                         icon_url="https://upload.wikimedia.org/wikipedia/commons/4/42/YouTube_icon_%282013-2017%29.png"
