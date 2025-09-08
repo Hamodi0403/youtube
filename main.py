@@ -529,7 +529,7 @@ async def monitor_youtube_chat(ctx, channel_id):
                     msg_display = (
                         message_content[:800] + "..."
                         if len(message_content) > 800
-                        else (message_content أو "*رسالة فارغة أو ايموجي*")
+                        else (message_content or "*رسالة فارغة أو ايموجي*")
                     )
 
                     embed = discord.Embed(
