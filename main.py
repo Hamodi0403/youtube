@@ -32,15 +32,7 @@ LOG_CHANNEL_ID = 1406224327912980480
 # active_chats: لكل روم Discord بنخزن اوبجكت الشات + حالة التشغيل
 active_chats = {}
 
-# ملاحظات مهمة:
-# 1) تم إلغاء Global Duplicate بالكامل بناءً على طلبك.
-# 2) الاعتماد على فلترة فردية فقط (Per-User).
-# 3) إضافة طبقة Anti-cheat قوية (Token Normalization + Similarities).
-# 4) الإبقاء على نفس الأوامر ونصوصها كما هي.
-
 # أخر رسائل كل مستخدم داخل "هذا الروم" (Per-room Per-user)
-# هنخزن آخر عدد معقول لتاريخ رسائل المستخدم كي نقارن ضدها.
-# structure: user_last_messages[(guild_id, channel_id, author_name)] -> deque([...])
 user_last_messages = defaultdict(lambda: deque(maxlen=150))
 
 # Rate limit per user (5 رسائل / 10 ثواني) — نفس سلوكك القديم
@@ -59,8 +51,6 @@ RATE_LIMIT_MAX_MSG = 5          # أقصى عدد رسائل
 RATE_LIMIT_WINDOW_SEC = 10      # خلال 10 ثواني
 
 # عتبات التشابه:
-# - نستخدم أكثر من أسلوب: token_set_ratio / token_sort_ratio + Jaccard
-# - في العربي/الإنجليزي: 92 مناسبة جدًا (زي كودك)؛ مع التطبيع بتبقى قوية ضد الاحتيال.
 THRESHOLD_TOKEN_SORT = 92
 THRESHOLD_TOKEN_SET  = 92
 THRESHOLD_JACCARD    = 0.90  # 90% تشابه في مجموعة التوكنز بعد التطبيع
@@ -68,15 +58,6 @@ THRESHOLD_JACCARD    = 0.90  # 90% تشابه في مجموعة التوكنز �
 # ============================================================
 #                   أدوات التطبيع (Normalization)
 # ============================================================
-# هنقوّي normalize بحيث:
-# - نشيل التشكيل
-# - نشيل التطويل
-# - نوحّد الهمزات/الألف/الياء/التاء المربوطة
-# - نشيل الرموز والمسافات الزائدة
-# - نفك أي مسافات مخادعة/رموز تحكم (ZWJ/LRM/RLM ... الخ)
-# - نطبّق Lowercase للإنجليزي
-# - في الآخر نرجّع نصاً نظيفاً + قائمة توكنز Sorted للمقارنات
-
 _AR_DIACRITICS_PATTERN = re.compile(r'[\u064B-\u065F\u0610-\u061A\u06D6-\u06ED]')
 _TATWEEL_PATTERN       = re.compile(r'[\u0640]')  # ـ
 _CONTROL_CHARS_PATTERN = re.compile(
@@ -85,45 +66,30 @@ _CONTROL_CHARS_PATTERN = re.compile(
 _PUNCT_NUM_PATTERN     = re.compile(r'[^\w\s]')  # هنسيب الأرقام والحروف فقط
 _MULTI_SPACE           = re.compile(r'\s+')
 
-# توحيد بعض الحروف العربية الشائعة
 def _arabic_unify_letters(text: str) -> str:
-    # توحيد الألف وأنواعها
     text = re.sub(r'[إأٱآا]', 'ا', text)
-    # توحيد الياء/الألف المقصورة
     text = re.sub(r'[يى]', 'ي', text)
-    # توحيد الهاء/التاء المربوطة (اختيارياً بنحو أفضل للتشابه)
     text = re.sub(r'[ة]', 'ه', text)
-    # همزات على الواو/الياء -> همزة مستقلة
     text = re.sub(r'[ؤئ]', 'ء', text)
     return text
 
 def _normalize_repeated_letters(text: str) -> str:
-    # تقليص التكرارات المبالغ فيها بالحروف (مثلا: مهممممم -> مهم)
-    return re.sub(r'(.)\1{2,}', r'\1\1', text)  # خليه أقصى تكرار متتالي حرفين
+    return re.sub(r'(.)\1{2,}', r'\1\1', text)
 
 def normalize(text: str) -> str:
     if not text:
         return ''
-    # إزالة علامات التحكم/الكائنات غير المرئية
     text = _CONTROL_CHARS_PATTERN.sub('', text)
-    # إزالة التشكيل
     text = _AR_DIACRITICS_PATTERN.sub('', text)
-    # إزالة التطويل
     text = _TATWEEL_PATTERN.sub('', text)
-    # توحيد الحروف العربية
     text = _arabic_unify_letters(text)
-    # Lowercase للإنجليزي
     text = text.lower()
-    # إزالة الرموز/الترقيم
     text = _PUNCT_NUM_PATTERN.sub(' ', text)
-    # تقليص التكرارات المبالغ فيها
     text = _normalize_repeated_letters(text)
-    # مسافات نظيفة
     text = _MULTI_SPACE.sub(' ', text).strip()
     return text
 
 def tokens_sorted(text: str) -> List[str]:
-    # رجّع قائمة توكنز مرتبة (لضبط مقارنات token_sort / jaccard)
     if not text:
         return []
     toks = text.split()
@@ -143,31 +109,14 @@ def jaccard_similarity(a_tokens: List[str], b_tokens: List[str]) -> float:
     return inter / union if union else 0.0
 
 def strong_semantic_similarity(a: str, b: str) -> Tuple[bool, dict]:
-    """
-    يعيد (is_similar, debug_info)
-    - يشغّل ثلاث مقاييس:
-      1) RapidFuzz token_sort_ratio
-      2) RapidFuzz token_set_ratio
-      3) Jaccard على توكنز Sorted
-    - يعتبر الرسالتين متشابهتين إذا:
-      (token_sort_ratio >= THRESHOLD_TOKEN_SORT) OR
-      (token_set_ratio  >= THRESHOLD_TOKEN_SET ) OR
-      (Jaccard >= THRESHOLD_JACCARD)
-    """
     na, nb = normalize(a), normalize(b)
-    # لو فاضيين بعد التطبيع، اعتبرهم متشابهين (نفس الفكرة/إيموجي بس)
     if not na and not nb:
         return True, {'reason': 'empty_after_normalize'}
-
-    # RapidFuzz (String-level but token-aware)
     tsort = fuzz.token_sort_ratio(na, nb)
     tset  = fuzz.token_set_ratio(na, nb)
-
-    # Jaccard على توكنز
     ja = tokens_sorted(na)
     jb = tokens_sorted(nb)
     jacc = jaccard_similarity(ja, jb)
-
     similar = (tsort >= THRESHOLD_TOKEN_SORT) or (tset >= THRESHOLD_TOKEN_SET) or (jacc >= THRESHOLD_JACCARD)
     info = {
         'token_sort_ratio': tsort,
@@ -178,18 +127,11 @@ def strong_semantic_similarity(a: str, b: str) -> Tuple[bool, dict]:
     }
     return similar, info
 
-# ============================================================
-#               أدوات العرض / إصلاح نص مختلط RTL/LTR
-# ============================================================
 def fix_mixed_text(text):
-    # لو النص فيه عربي وإنجليزي سوا، نزود RLE/PDF عشان يبان صح في ديسكورد
     if re.search(r'[\u0600-\u06FF]', text) and re.search(r'[a-zA-Z]', text):
         return '\u202B' + text + '\u202C'
     return text
 
-# ============================================================
-#              استخراج Video ID من الرابط/النص
-# ============================================================
 def extract_video_id(text):
     patterns = [
         r'(?:v=|\/)([0-9A-Za-z_-]{11})(?:[&?]|\s|$)',
@@ -202,20 +144,13 @@ def extract_video_id(text):
             return match.group(1)
     return text.strip()
 
-# ============================================================
-#                 لوج الرسائل المرفوضة
-# ============================================================
 async def log_message(ctx, reason, author_name, content, extra: dict = None):
-    """إرسال رسالة مرفوضة للـ logs channel مع ترقيم الرسائل ورقم الرسالة الأصلية (لو مكررة)"""
     log_channel = bot.get_channel(LOG_CHANNEL_ID)
     if not log_channel:
         return
-
-    # --- زيادة العداد ---
     channel_id = ctx.channel.id if ctx and hasattr(ctx, 'channel') else LOG_CHANNEL_ID
     log_message_counts[channel_id] += 1
     log_count = log_message_counts[channel_id]
-
     desc = f"👤 **{author_name}**\n"
     if content:
         desc += f"💬 {content[:600]}"
@@ -244,14 +179,7 @@ async def log_message(ctx, reason, author_name, content, extra: dict = None):
     except:
         pass
 
-# ============================================================
-#           إعادة اتصال صامتة (لو حصل مشاكل مؤقتة)
-# ============================================================
 async def reconnect_youtube_chat_silent(chat_data, channel_id):
-    """
-    إعادة اتصال صامتة تكمل من آخر مكان بدون رسائل مكررة.
-    في pytchat، لو الـ object لسه حي، غالبًا هيكمل بـ continuation.
-    """
     try:
         old_chat = chat_data['chat']
         if not old_chat.is_alive():
@@ -260,9 +188,6 @@ async def reconnect_youtube_chat_silent(chat_data, channel_id):
     except Exception:
         return False
 
-# ============================================================
-#           أحداث ديسكورد + أوامر (بدون تغيير النصوص)
-# ============================================================
 @bot.check
 async def global_check(ctx):
     if isinstance(ctx.author, discord.Member):
@@ -313,12 +238,11 @@ async def start_youtube_chat(ctx, video_id: str = None):
         return
 
     # 🟢 امسح سجل الروم بالكامل قبل البدء (تعديل جديد مهم)
-    # احذف سجل الرسائل والمعدلات المرتبطة بهذه القناة قبل بدء بث جديد
     for d in (user_last_messages, user_message_numbers, user_message_times):
         keys_to_remove = [k for k in d.keys() if k[1] == channel_id]
         for k in keys_to_remove:
             del d[k]
-    log_message_counts[channel_id] = 0  # عداد اللوجز
+    log_message_counts[channel_id] = 0
 
     await ctx.send(f'🔄 محاولة الاتصال بـ YouTube Live Chat...\n📺 Video ID: `{video_id}`')
     try:
@@ -348,42 +272,34 @@ async def start_youtube_chat(ctx, video_id: str = None):
 #                 قلب الفلترة داخل المراقبة
 # ============================================================
 async def monitor_youtube_chat(ctx, channel_id):
-    """
-    مراقبة الشات مع نظام إعادة اتصال ذكي وتأكيد مزدوج قبل إعلان انتهاء البث.
-    يحافظ على منطق الفلترة كما هو (Per-User, rate limit, similarity).
-    """
     chat_data = active_chats.get(channel_id)
     if not chat_data:
         return
 
     chat = chat_data['chat']
     video_id = chat_data['video_id']
-    message_count = 0  # 🟢 دايمًا يبدأ من 0 كل بث جديد
+    message_count = 0
     reconnect_attempts = 0
     max_reconnects = 3
     ended_by_stream = False
 
-    # ضبط القيم الخاصة بعملية التأكيد / إعادة الإنشاء
-    PROBE_ATTEMPTS = 4        # عدد محاولات probe السريعة للتأكد من وجود رسائل
-    PROBE_SLEEP_SEC = 5       # بين كل محاولة probe
-    RECREATE_ATTEMPTS = 3     # عدد محاولات إعادة إنشاء كائن pytchat
+    PROBE_ATTEMPTS = 4
+    PROBE_SLEEP_SEC = 5
+    RECREATE_ATTEMPTS = 3
     RECREATE_SLEEP_SEC = 5
 
-    # ----------- تعديل: إضافة تايم آوت نهائي -----------
     last_message_time = time.time()
-    MAX_NO_MESSAGE_SECONDS = 720  # توقف تلقائي إذا لم تصل أي رسالة خلال 8 دقائق
+    MAX_NO_MESSAGE_SECONDS = 480  # 8 دقائق (قللها عن السابق أفضل)
 
     try:
         while chat_data.get('running', False):
             loop = asyncio.get_event_loop()
             items = None
             try:
-                # محاولة القراءة العادية
                 chat_data_result = await loop.run_in_executor(None, chat.get)
                 items = chat_data_result.sync_items()
                 reconnect_attempts = 0
             except Exception:
-                # قراءة فشلت مؤقتاً -> probe سريع للتأكد إن المشكلة مؤقتة
                 probe_found = False
                 for _ in range(PROBE_ATTEMPTS):
                     await asyncio.sleep(PROBE_SLEEP_SEC)
@@ -395,17 +311,13 @@ async def monitor_youtube_chat(ctx, channel_id):
                             probe_found = True
                             break
                     except:
-                        # تجاهل الأخطاء المؤقتة خلال الـ probe
                         continue
-
                 if not probe_found:
-                    # لو الـ probe مافيش ، نجرب نُعيد إنشاء كائن chat جديد (silent)
                     recreated = False
                     for _ in range(RECREATE_ATTEMPTS):
                         try:
                             new_chat = pytchat.create(video_id=video_id)
                             if new_chat and new_chat.is_alive():
-                                # استبدال الكائن القديم بالجديد وواصلة العمل
                                 chat = new_chat
                                 chat_data['chat'] = new_chat
                                 recreated = True
@@ -413,17 +325,11 @@ async def monitor_youtube_chat(ctx, channel_id):
                         except:
                             pass
                         await asyncio.sleep(RECREATE_SLEEP_SEC)
-
                     if not recreated and not probe_found:
-                        # لم نجده بعد كل المحاولات -> اعتبر البث انتهى
                         ended_by_stream = True
                         break
-                    # لو اعادة الإنشاء نجحت أو probe عادت برسائل، نكمل الحلقة لمعالجة `items`
-            # نهاية try/except القراءة
 
-            # لو ما فيش عناصر (items) بعد كل محاولات الـ probe/recreate -> تأكيد الانتهاء
             if not items:
-                # probe ثانية مع نفس المنطق لتأكيد أن البث انتهى فعلاً
                 probe_found = False
                 for _ in range(PROBE_ATTEMPTS):
                     await asyncio.sleep(PROBE_SLEEP_SEC)
@@ -438,7 +344,6 @@ async def monitor_youtube_chat(ctx, channel_id):
                         continue
 
                 if not probe_found:
-                    # حاول إعادة إنشاء مرة أخرى قبل الاستسلام
                     recreated = False
                     for _ in range(RECREATE_ATTEMPTS):
                         try:
@@ -451,17 +356,12 @@ async def monitor_youtube_chat(ctx, channel_id):
                         except:
                             pass
                         await asyncio.sleep(RECREATE_SLEEP_SEC)
-
                     if not recreated and not probe_found:
                         ended_by_stream = True
                         break
-                    # وإلا: لو recreated نجح أو probe وجد رسائل → نتابع
 
-            # ----------- تعديل: تحقق من التايم آوت النهائي لو لم توجد رسائل -----------
             if not items:
-                # لا يوجد شيء للمعالجة هذه الدورة، نكمل للوب التالي
                 await asyncio.sleep(1)
-                # تحقق من التايم آوت النهائي
                 if time.time() - last_message_time > MAX_NO_MESSAGE_SECONDS:
                     ended_by_stream = True
                     break
@@ -470,12 +370,9 @@ async def monitor_youtube_chat(ctx, channel_id):
             for c in items:
                 if not chat_data.get('running', False):
                     break
-
                 message_content_raw = c.message if c.message else ""
                 message_content = message_content_raw.strip()
                 author_name = c.author.name
-
-                # ----- Rate Limit (Per-User) -----
                 key = (ctx.guild.id if ctx.guild else 0, ctx.channel.id, author_name)
                 now = time.time()
                 times = user_message_times[key]
@@ -483,11 +380,9 @@ async def monitor_youtube_chat(ctx, channel_id):
                 while times and now - times[0] > RATE_LIMIT_WINDOW_SEC:
                     times.popleft()
                 if len(times) > RATE_LIMIT_MAX_MSG:
-                    # تخطى المعدل — نسجّل ونتجاهل
                     await log_message(ctx, "Rate Limit", author_name, message_content)
                     continue
 
-                # ----- Anti-cheat (Per-User Similarity) -----
                 past_msgs: deque = user_last_messages[key]
                 is_spam_similar = False
                 debug_info = None
@@ -513,13 +408,10 @@ async def monitor_youtube_chat(ctx, channel_id):
                     )
                     continue
 
-                # لو مش سبام: خزّن الرسالة في تاريخ المستخدم (Per-User)
                 past_msgs.append(message_content)
-                # ----------- زيادة message_count وتخزين رقم الرسالة -----------
                 message_count += 1
                 user_message_numbers[key][message_content] = message_count
 
-                # ----- تجهيز العرض وإرساله إلى روم الديسكورد -----
                 try:
                     try:
                         timestamp = datetime.fromisoformat(c.datetime.replace('Z', '+00:00')) if c.datetime else datetime.now()
@@ -545,17 +437,12 @@ async def monitor_youtube_chat(ctx, channel_id):
                         icon_url="https://upload.wikimedia.org/wikipedia/commons/4/42/YouTube_icon_%282013-2017%29.png"
                     )
                     await ctx.send(embed=embed)
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.5)  # قلل السليب لمنع التهنيج
                 except Exception:
-                    # لو حصلت مشكلة أثناء الإرسال، نكمل الحلقة بدون كراس
                     pass
-
-                # ----------- تحديث وقت آخر رسالة -----------
                 last_message_time = time.time()
 
-            # تهدئة بسيطة بين اللوبات
-            await asyncio.sleep(3)
-            # ----------- تحقق من التايم آوت النهائي بعد كل لفة -----------
+            await asyncio.sleep(0.5)   # قلل السليب هنا أيضًا
             if time.time() - last_message_time > MAX_NO_MESSAGE_SECONDS:
                 ended_by_stream = True
                 break
@@ -563,23 +450,17 @@ async def monitor_youtube_chat(ctx, channel_id):
     finally:
         if channel_id in active_chats:
             del active_chats[channel_id]
-        # 🟢 امسح سجل الروم بالكامل عند انتهاء البث (تعديل مهم)
-        # تصفير سجل الرسائل والمعدلات عند انتهاء البث
         for d in (user_last_messages, user_message_numbers, user_message_times):
             keys_to_remove = [k for k in d.keys() if k[1] == channel_id]
             for k in keys_to_remove:
                 del d[k]
         log_message_counts[channel_id] = 0
-        # نرسل رسالة الانهاء مرة واحدة لو تأكدنا من انتهاء البث
         if ended_by_stream:
             try:
                 await ctx.send("# 📴 **تم إيقاف البوت تلقائيًا لأن البث انتهى.**")
             except:
                 pass
 
-# ============================================================
-#                 بقية الأوامر — بدون تغيير
-# ============================================================
 @bot.command(name='stop')
 async def stop_youtube_chat(ctx):
     channel_id = ctx.channel.id
@@ -588,7 +469,6 @@ async def stop_youtube_chat(ctx):
         return
     active_chats[channel_id]['running'] = False
     del active_chats[channel_id]
-    # 🟢 امسح سجل الروم بالكامل عند الإيقاف اليدوي (تعديل مهم)
     for d in (user_last_messages, user_message_numbers, user_message_times):
         keys_to_remove = [k for k in d.keys() if k[1] == channel_id]
         for k in keys_to_remove:
@@ -645,9 +525,6 @@ async def commands_help(ctx):
                     icon_url="https://cdn.discordapp.com/emojis/741243683501817978.png")
     await ctx.send(embed=embed)
 
-# ============================================================
-#                 نقطة التشغيل
-# ============================================================
 async def main():
     keep_alive()
     token = os.getenv('DISCORD_TOKEN')
