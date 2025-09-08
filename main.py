@@ -312,6 +312,14 @@ async def start_youtube_chat(ctx, video_id: str = None):
         await ctx.send("⚠️ يوجد شات نشط بالفعل! استخدم `!stop` لإيقافه.")
         return
 
+    # 🟢 امسح سجل الروم بالكامل قبل البدء (تعديل جديد مهم)
+    # احذف سجل الرسائل والمعدلات المرتبطة بهذه القناة قبل بدء بث جديد
+    for d in (user_last_messages, user_message_numbers, user_message_times):
+        keys_to_remove = [k for k in d.keys() if k[1] == channel_id]
+        for k in keys_to_remove:
+            del d[k]
+    log_message_counts[channel_id] = 0  # عداد اللوجز
+
     await ctx.send(f'🔄 محاولة الاتصال بـ YouTube Live Chat...\n📺 Video ID: `{video_id}`')
     try:
         chat = pytchat.create(video_id=video_id)
@@ -350,7 +358,7 @@ async def monitor_youtube_chat(ctx, channel_id):
 
     chat = chat_data['chat']
     video_id = chat_data['video_id']
-    message_count = 0
+    message_count = 0  # 🟢 دايمًا يبدأ من 0 كل بث جديد
     reconnect_attempts = 0
     max_reconnects = 3
     ended_by_stream = False
@@ -363,7 +371,7 @@ async def monitor_youtube_chat(ctx, channel_id):
 
     # ----------- تعديل: إضافة تايم آوت نهائي -----------
     last_message_time = time.time()
-    MAX_NO_MESSAGE_SECONDS = 480  # توقف تلقائي إذا لم تصل أي رسالة خلال 8 دقائق
+    MAX_NO_MESSAGE_SECONDS = 720  # توقف تلقائي إذا لم تصل أي رسالة خلال 8 دقائق
 
     try:
         while chat_data.get('running', False):
@@ -521,7 +529,7 @@ async def monitor_youtube_chat(ctx, channel_id):
                     msg_display = (
                         message_content[:800] + "..."
                         if len(message_content) > 800
-                        else (message_content or "*رسالة فارغة أو ايموجي*")
+                        else (message_content أو "*رسالة فارغة أو ايموجي*")
                     )
 
                     embed = discord.Embed(
@@ -555,6 +563,13 @@ async def monitor_youtube_chat(ctx, channel_id):
     finally:
         if channel_id in active_chats:
             del active_chats[channel_id]
+        # 🟢 امسح سجل الروم بالكامل عند انتهاء البث (تعديل مهم)
+        # تصفير سجل الرسائل والمعدلات عند انتهاء البث
+        for d in (user_last_messages, user_message_numbers, user_message_times):
+            keys_to_remove = [k for k in d.keys() if k[1] == channel_id]
+            for k in keys_to_remove:
+                del d[k]
+        log_message_counts[channel_id] = 0
         # نرسل رسالة الانهاء مرة واحدة لو تأكدنا من انتهاء البث
         if ended_by_stream:
             try:
@@ -573,6 +588,13 @@ async def stop_youtube_chat(ctx):
         return
     active_chats[channel_id]['running'] = False
     del active_chats[channel_id]
+    # 🟢 امسح سجل الروم بالكامل عند الإيقاف اليدوي (تعديل مهم)
+    for d in (user_last_messages, user_message_numbers, user_message_times):
+        keys_to_remove = [k for k in d.keys() if k[1] == channel_id]
+        for k in keys_to_remove:
+            del d[k]
+    log_message_counts[channel_id] = 0
+
     embed = discord.Embed(
         title="⏹️ تم إيقاف YouTube Chat",
         description="تم إيقاف نقل الرسائل",
