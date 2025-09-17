@@ -289,7 +289,7 @@ async def monitor_youtube_chat(ctx, channel_id):
     RECREATE_SLEEP_SEC = 5
 
     last_message_time = time.time()
-    MAX_NO_MESSAGE_SECONDS = 480  # 8 دقائق (قللها عن السابق أفضل)
+    MAX_NO_MESSAGE_SECONDS = 1320  # 8 دقائق (قللها عن السابق أفضل)
 
     try:
         while chat_data.get('running', False):
