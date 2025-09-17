@@ -525,6 +525,24 @@ async def monitor_youtube_chat(ctx, channel_id):
         if video_id and video_id in junked_users_data:
             junked_users_data[video_id]["ended_at"] = time.time()
             save_junked_users()
+
+            # ========= إرسال قائمة الـ junk تلقائيًا قبل رسالة الإيقاف =========
+            threshold = 8
+            users = junked_users_data[video_id]["users"]
+            junked_users = [u for u in users.values() if u["count"] >= threshold]
+            if junked_users:
+                for u in junked_users:
+                    embed = discord.Embed(
+                        title="🚫 شخص صنف Junk",
+                        description=f"**{u['author_name']}**\nظهر في اللوجز: {u['count']} مرة",
+                        color=0xff5555
+                    )
+                    if u["author_image"]:
+                        embed.set_thumbnail(url=u["author_image"])
+                    await ctx.send(embed=embed)
+            else:
+                await ctx.send("✅ لا يوجد أشخاص صنفوا كـ junk في هذا البث.")
+
         if ended_by_stream:
             try:
                 await ctx.send("# 📴 **تم إيقاف البوت تلقائيًا لأن البث انتهى.**")
@@ -669,7 +687,7 @@ async def junk_command(ctx):
     clear_expired_junk()
     video_id = get_current_video_id(ctx.channel.id)
     if not video_id or video_id not in junked_users_data:
-        await ctx.send("لا يوجد قائمة مخربين لهذا البث حالياً.")
+        await ctx.send("لا يوجد بث حالياً لكي يعرض قائمة المخربين.")
         return
     threshold = 15
     users = junked_users_data[video_id]["users"]
