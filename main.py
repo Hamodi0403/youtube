@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 import asyncio
 import os
+import json
 from keep_alive import keep_alive
 import pytchat
 from datetime import datetime
@@ -29,46 +30,61 @@ LOG_CHANNEL_ID = 1406224327912980480
 # ============================================================
 #                   حالة / تخزين داخلي
 # ============================================================
-# active_chats: لكل روم Discord بنخزن اوبجكت الشات + حالة التشغيل
 active_chats = {}
-
-# أخر رسائل كل مستخدم داخل "هذا الروم" (Per-room Per-user)
 user_last_messages = defaultdict(lambda: deque(maxlen=150))
-
-# Rate limit per user (5 رسائل / 10 ثواني) — نفس سلوكك القديم
 user_message_times = defaultdict(deque)  # key: (guild_id, channel_id, author_name)
-
-# عداد رسائل اللوجز لكل روم (logs)
 log_message_counts = defaultdict(int)  # NEW
-
-# تخزين رقم كل رسالة مقبولة للمستخدم في كل روم
 user_message_numbers = defaultdict(dict)  # key: (guild_id, channel_id, author_name) -> dict: {message_content: message_number}
 
 # ============================================================
-#              تخزين الأشخاص اللي ظهروا كتير في اللوجز
+#              تخزين الأشخاص اللي ظهروا كتير في اللوجز (دائم)
 # ============================================================
+JUNKED_USERS_FILE = "junked_users.json"
 junked_users_info = defaultdict(lambda: {"count": 0, "author_name": None, "author_image": None})
+
+def load_junked_users():
+    global junked_users_info
+    if os.path.exists(JUNKED_USERS_FILE):
+        try:
+            with open(JUNKED_USERS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                junked_users_info = defaultdict(
+                    lambda: {"count": 0, "author_name": None, "author_image": None},
+                    {tuple(json.loads(k)): v for k, v in data.items()}
+                )
+        except Exception:
+            pass
+
+def save_junked_users():
+    # نحول الـ keys من tuple إلى list عشان json
+    data = {json.dumps(list(k)): v for k, v in junked_users_info.items()}
+    try:
+        with open(JUNKED_USERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+# تحميل القائمة عند بدء البوت
+load_junked_users()
 
 # ============================================================
 #                   إعدادات الفلاتر/العَتبات
 # ============================================================
-RATE_LIMIT_MAX_MSG = 5          # أقصى عدد رسائل
-RATE_LIMIT_WINDOW_SEC = 10      # خلال 10 ثواني
-
-# عتبات التشابه:
+RATE_LIMIT_MAX_MSG = 5
+RATE_LIMIT_WINDOW_SEC = 10
 THRESHOLD_TOKEN_SORT = 92
 THRESHOLD_TOKEN_SET  = 92
-THRESHOLD_JACCARD    = 0.90  # 90% تشابه في مجموعة التوكنز بعد التطبيع
+THRESHOLD_JACCARD    = 0.90
 
 # ============================================================
 #                   أدوات التطبيع (Normalization)
 # ============================================================
 _AR_DIACRITICS_PATTERN = re.compile(r'[\u064B-\u065F\u0610-\u061A\u06D6-\u06ED]')
-_TATWEEL_PATTERN       = re.compile(r'[\u0640]')  # ـ
+_TATWEEL_PATTERN       = re.compile(r'[\u0640]')
 _CONTROL_CHARS_PATTERN = re.compile(
-    r'[\u200B-\u200F\u061C\u202A-\u202E\u2066-\u2069]'  # ZWSP, ZWJ, LRM/RLM, ALM, embedding marks
+    r'[\u200B-\u200F\u061C\u202A-\u202E\u2066-\u2069]'
 )
-_PUNCT_NUM_PATTERN     = re.compile(r'[^\w\s]')  # هنسيب الأرقام والحروف فقط
+_PUNCT_NUM_PATTERN     = re.compile(r'[^\w\s]')
 _MULTI_SPACE           = re.compile(r'\s+')
 
 def _arabic_unify_letters(text: str) -> str:
@@ -149,18 +165,22 @@ def extract_video_id(text):
             return match.group(1)
     return text.strip()
 
+# ============================================================
+#                     دالة اللوجز المعدلة
+# ============================================================
 async def log_message(ctx, reason, author_name, content, extra: dict = None, author_image=None):
     log_channel = bot.get_channel(LOG_CHANNEL_ID)
     if not log_channel:
         return
     channel_id = ctx.channel.id if ctx and hasattr(ctx, 'channel') else LOG_CHANNEL_ID
 
-    # سجل الشخص في junked_users_info
-    key = (ctx.guild.id if ctx.guild else 0, channel_id, author_name)
+    # نخزن الشخص بشكل عالمي (بدون ربط بالروم أو السيرفر)
+    key = (author_name,)
     junked_users_info[key]["count"] += 1
     junked_users_info[key]["author_name"] = author_name
     if author_image:
         junked_users_info[key]["author_image"] = author_image
+    save_junked_users()
 
     log_message_counts[channel_id] += 1
     log_count = log_message_counts[channel_id]
@@ -212,6 +232,7 @@ async def global_check(ctx):
 
 @bot.event
 async def on_ready():
+    load_junked_users()
     print(f'✅ {bot.user} متصل بـ Discord!')
     print(f'🔗 البوت موجود في {len(bot.guilds)} سيرفر')
     print(f'🆔 Bot ID: {bot.user.id}')
@@ -250,7 +271,6 @@ async def start_youtube_chat(ctx, video_id: str = None):
         await ctx.send("⚠️ يوجد شات نشط بالفعل! استخدم `!stop` لإيقافه.")
         return
 
-    # 🟢 امسح سجل الروم بالكامل قبل البدء (تعديل جديد مهم)
     for d in (user_last_messages, user_message_numbers, user_message_times):
         keys_to_remove = [k for k in d.keys() if k[1] == channel_id]
         for k in keys_to_remove:
@@ -302,7 +322,7 @@ async def monitor_youtube_chat(ctx, channel_id):
     RECREATE_SLEEP_SEC = 5
 
     last_message_time = time.time()
-    MAX_NO_MESSAGE_SECONDS = 1320  # 8 دقائق (قللها عن السابق أفضل)
+    MAX_NO_MESSAGE_SECONDS = 1320
 
     try:
         while chat_data.get('running', False):
@@ -457,12 +477,12 @@ async def monitor_youtube_chat(ctx, channel_id):
                         icon_url="https://upload.wikimedia.org/wikipedia/commons/4/42/YouTube_icon_%282013-2017%29.png"
                     )
                     await ctx.send(embed=embed)
-                    await asyncio.sleep(0.5)  # قلل السليب لمنع التهنيج
+                    await asyncio.sleep(0.5)
                 except Exception:
                     pass
                 last_message_time = time.time()
 
-            await asyncio.sleep(0.5)   # قلل السليب هنا أيضًا
+            await asyncio.sleep(0.5)
             if time.time() - last_message_time > MAX_NO_MESSAGE_SECONDS:
                 ended_by_stream = True
                 break
@@ -518,8 +538,6 @@ async def status(ctx):
         embed.add_field(name="📍 الرومات النشطة", value="\n".join(channels), inline=False)
     embed.set_footer(text="© 2025 Ahmed Magdy", icon_url="https://cdn.discordapp.com/emojis/741243683501817978.png")
     await ctx.send(embed=embed)
-
-# ... باقي الكود كما هو فوق ...
 
 @bot.command(name='change_name')
 async def change_name(ctx, *, new_name: str = None):
@@ -579,8 +597,6 @@ async def change_banner(ctx):
     except Exception as e:
         await ctx.send(f"❌ حدث خطأ:\n```{str(e)}```")
 
-# ... باقي الكود كما هو ...
-
 @bot.command(name='commands')
 async def commands_help(ctx):
     embed = discord.Embed(
@@ -594,8 +610,8 @@ async def commands_help(ctx):
     `!status` - عرض تفاصيل حالة البوت
     `!explain` - شرح ازاي تجيب الاي دي
     `!commands` - عرض قائمة المساعدة الكاملة
-    `!junk` - عرض قائمة المخربين
-    `!junk_clear` - تصفير قائمة المخربين
+    `!junk` - عرض قائمة الأشخاص المخربين
+    `!junk_clear` - تصفير قائمة الأشخاص المخربين
     """
     embed.add_field(name="📋 الأوامر المتاحة", value=commands_text, inline=False)
     commands_appearance = """
@@ -618,47 +634,38 @@ async def commands_help(ctx):
 # ============================================================
 #             أوامر junk و junk_clear المضافة حديثاً
 # ============================================================
-
 @bot.command(name='junk')
 async def junk_command(ctx):
-    channel_id = ctx.channel.id
-    guild_id = ctx.guild.id if ctx.guild else 0
     threshold = 8
     junked_users = [
         (info["author_name"], info["author_image"], info["count"])
         for key, info in junked_users_info.items()
-        if key[0] == guild_id and key[1] == channel_id and info["count"] >= threshold
+        if info["count"] >= threshold
     ]
 
     if not junked_users:
         await ctx.send("✅ لا يوجد أشخاص صنفوا كـ junk حتى الآن.")
         return
 
-    embed = discord.Embed(
-        title="🚫 قائمة الأشخاص Junk",
-        description=f"الأشخاص اللي ظهروا في اللوجز أكتر من {threshold} مرة:",
-        color=0xff5555
-    )
     for name, image_url, count in junked_users:
-        field_value = f"[صورة الحساب]({image_url})" if image_url else "بدون صورة"
-        embed.add_field(
-            name=f"{name} ({count} مرات)",
-            value=field_value,
-            inline=False
+        embed = discord.Embed(
+            title="🚫 شخص صنف Junk",
+            description=f"**{name}**\nظهر في اللوجز: {count} مرة",
+            color=0xff5555
         )
-    await ctx.send(embed=embed)
+        if image_url:
+            embed.set_thumbnail(url=image_url)
+        await ctx.send(embed=embed)
 
 @bot.command(name='junk_clear')
 async def junk_clear_command(ctx):
-    channel_id = ctx.channel.id
-    guild_id = ctx.guild.id if ctx.guild else 0
-    keys_to_remove = [k for k in junked_users_info.keys() if k[0] == guild_id and k[1] == channel_id]
-    for k in keys_to_remove:
-        del junked_users_info[k]
-    await ctx.send("✅ تم تصفير قائمة الـ junk لهذا الروم بنجاح.")
+    junked_users_info.clear()
+    save_junked_users()
+    await ctx.send("✅ تم تصفير قائمة الـ junk بنجاح.")
 
-# ... باقي الكود كما هو ...
-
+# ============================================================
+#                     Main Loop
+# ============================================================
 async def main():
     keep_alive()
     token = os.getenv('DISCORD_TOKEN')
