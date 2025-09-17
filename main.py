@@ -499,6 +499,69 @@ async def status(ctx):
     embed.set_footer(text="© 2025 Ahmed Magdy", icon_url="https://cdn.discordapp.com/emojis/741243683501817978.png")
     await ctx.send(embed=embed)
 
+# ... باقي الكود كما هو فوق ...
+
+@bot.command(name='change_name')
+async def change_name(ctx, *, new_name: str = None):
+    if not new_name:
+        await ctx.send("❌ يجب إرسال الاسم الجديد بعد الأمر.\nمثال: `!change_name Ahmed`")
+        return
+    try:
+        await bot.user.edit(username=new_name)
+        await ctx.send(f"✅ تم تغيير اسم البوت إلى: **{new_name}**")
+    except Exception as e:
+        await ctx.send(f"❌ حدث خطأ أثناء تغيير الاسم:\n```{str(e)}```")
+
+@bot.command(name='change_photo')
+async def change_photo(ctx):
+    await ctx.send("📸 أرسل صورة البوت الآن (كـ ملف أو صورة) خلال 30 ثانية.")
+    def check(m):
+        return m.author == ctx.author and m.attachments and m.channel == ctx.channel
+
+    try:
+        msg = await bot.wait_for('message', timeout=30.0, check=check)
+        attachment = msg.attachments[0]
+        img_bytes = await attachment.read()
+        await bot.user.edit(avatar=img_bytes)
+        await ctx.send("✅ تم تغيير صورة البوت بنجاح!")
+    except asyncio.TimeoutError:
+        await ctx.send("⏰ انتهى الوقت! أعد إرسال الأمر.")
+    except Exception as e:
+        await ctx.send(f"❌ حدث خطأ:\n```{str(e)}```")
+
+@bot.command(name='change_banner')
+async def change_banner(ctx):
+    await ctx.send("🖼️ أرسل صورة البانر الآن (كـ ملف أو صورة) خلال 30 ثانية.\nوإذا أردت إضافة وصف للبانر، أرسله بعد الصورة في رسالة ثانية خلال 30 ثانية.")
+
+    def img_check(m):
+        return m.author == ctx.author and m.attachments and m.channel == ctx.channel
+
+    def desc_check(m):
+        return m.author == ctx.author and not m.attachments and m.channel == ctx.channel
+
+    try:
+        img_msg = await bot.wait_for('message', timeout=30.0, check=img_check)
+        banner_bytes = await img_msg.attachments[0].read()
+        desc_msg = None
+        try:
+            desc_msg = await bot.wait_for('message', timeout=30.0, check=desc_check)
+            banner_desc = desc_msg.content
+        except asyncio.TimeoutError:
+            banner_desc = None
+
+        await bot.user.edit(banner=banner_bytes)
+        await ctx.send("✅ تم تغيير بانر البوت بنجاح!")
+        if banner_desc:
+            await ctx.send(f"📋 وصف البانر الجديد:\n{banner_desc}")
+
+    except asyncio.TimeoutError:
+        await ctx.send("⏰ انتهى الوقت! أعد إرسال الأمر.")
+    except Exception as e:
+        await ctx.send(f"❌ حدث خطأ:\n```{str(e)}```")
+
+# ... باقي الكود كما هو ...
+
+
 @bot.command(name='commands')
 async def commands_help(ctx):
     embed = discord.Embed(
