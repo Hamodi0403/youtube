@@ -531,7 +531,7 @@ async def change_photo(ctx):
 
 @bot.command(name='change_banner')
 async def change_banner(ctx):
-    await ctx.send("🖼️ أرسل صورة البانر الآن (كـ ملف أو صورة) خلال 30 ثانية.\nوإذا أردت إضافة وصف للبانر، أرسله بعد الصورة في رسالة ثانية خلال 30 ثانية.")
+    await ctx.send("🖼️ أرسل صورة البانر الآن (كـ ملف أو صورة) خلال 30 ثانية..")
 
     def img_check(m):
         return m.author == ctx.author and m.attachments and m.channel == ctx.channel
@@ -577,6 +577,12 @@ async def commands_help(ctx):
     `!commands` - عرض قائمة المساعدة الكاملة
     """
     embed.add_field(name="📋 الأوامر المتاحة", value=commands_text, inline=False)
+    commands_appearance = """
+    `!change_name` - تغيير اسم البوت
+    `!change_photo` - تغيير صورة البوت
+    `!change_banner` - تغيير بانر البوت
+    """
+    embed.add_field(name="🤖 اوامر مظهر البوت", value=commands_appearance, inline=False)
     embed.add_field(name="💡 نصائح مهمة", 
                    value="• تأكد من أن الفيديو يحتوي على Live Chat نشط\n"
                         "• البوت يتجنب الرسائل المتكررة والسبام تلقائياً\n"
