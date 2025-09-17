@@ -45,6 +45,11 @@ log_message_counts = defaultdict(int)  # NEW
 user_message_numbers = defaultdict(dict)  # key: (guild_id, channel_id, author_name) -> dict: {message_content: message_number}
 
 # ============================================================
+#              تخزين الأشخاص اللي ظهروا كتير في اللوجز
+# ============================================================
+junked_users_info = defaultdict(lambda: {"count": 0, "author_name": None, "author_image": None})
+
+# ============================================================
 #                   إعدادات الفلاتر/العَتبات
 # ============================================================
 RATE_LIMIT_MAX_MSG = 5          # أقصى عدد رسائل
@@ -144,11 +149,19 @@ def extract_video_id(text):
             return match.group(1)
     return text.strip()
 
-async def log_message(ctx, reason, author_name, content, extra: dict = None):
+async def log_message(ctx, reason, author_name, content, extra: dict = None, author_image=None):
     log_channel = bot.get_channel(LOG_CHANNEL_ID)
     if not log_channel:
         return
     channel_id = ctx.channel.id if ctx and hasattr(ctx, 'channel') else LOG_CHANNEL_ID
+
+    # سجل الشخص في junked_users_info
+    key = (ctx.guild.id if ctx.guild else 0, channel_id, author_name)
+    junked_users_info[key]["count"] += 1
+    junked_users_info[key]["author_name"] = author_name
+    if author_image:
+        junked_users_info[key]["author_image"] = author_image
+
     log_message_counts[channel_id] += 1
     log_count = log_message_counts[channel_id]
     desc = f"👤 **{author_name}**\n"
@@ -380,7 +393,13 @@ async def monitor_youtube_chat(ctx, channel_id):
                 while times and now - times[0] > RATE_LIMIT_WINDOW_SEC:
                     times.popleft()
                 if len(times) > RATE_LIMIT_MAX_MSG:
-                    await log_message(ctx, "Rate Limit", author_name, message_content)
+                    await log_message(
+                        ctx, 
+                        "Rate Limit", 
+                        author_name, 
+                        message_content,
+                        author_image=getattr(c.author, 'imageUrl', None)
+                    )
                     continue
 
                 past_msgs: deque = user_last_messages[key]
@@ -404,7 +423,8 @@ async def monitor_youtube_chat(ctx, channel_id):
                         "Similar Spam (Per-User)", 
                         author_name, 
                         message_content, 
-                        {**(debug_info or {}), "similar_message_number": similar_message_number}
+                        {**(debug_info or {}), "similar_message_number": similar_message_number},
+                        author_image=getattr(c.author, 'imageUrl', None)
                     )
                     continue
 
@@ -561,7 +581,6 @@ async def change_banner(ctx):
 
 # ... باقي الكود كما هو ...
 
-
 @bot.command(name='commands')
 async def commands_help(ctx):
     embed = discord.Embed(
@@ -575,6 +594,8 @@ async def commands_help(ctx):
     `!status` - عرض تفاصيل حالة البوت
     `!explain` - شرح ازاي تجيب الاي دي
     `!commands` - عرض قائمة المساعدة الكاملة
+    `!junk` - عرض قائمة المخربين
+    `!junk_clear` - تصفير قائمة المخربين
     """
     embed.add_field(name="📋 الأوامر المتاحة", value=commands_text, inline=False)
     commands_appearance = """
@@ -593,6 +614,50 @@ async def commands_help(ctx):
     embed.set_footer(text="© 2025 Ahmed Magdy - جميع الحقوق محفوظة", 
                     icon_url="https://cdn.discordapp.com/emojis/741243683501817978.png")
     await ctx.send(embed=embed)
+
+# ============================================================
+#             أوامر junk و junk_clear المضافة حديثاً
+# ============================================================
+
+@bot.command(name='junk')
+async def junk_command(ctx):
+    channel_id = ctx.channel.id
+    guild_id = ctx.guild.id if ctx.guild else 0
+    threshold = 8
+    junked_users = [
+        (info["author_name"], info["author_image"], info["count"])
+        for key, info in junked_users_info.items()
+        if key[0] == guild_id and key[1] == channel_id and info["count"] >= threshold
+    ]
+
+    if not junked_users:
+        await ctx.send("✅ لا يوجد أشخاص صنفوا كـ junk حتى الآن.")
+        return
+
+    embed = discord.Embed(
+        title="🚫 قائمة الأشخاص Junk",
+        description=f"الأشخاص اللي ظهروا في اللوجز أكتر من {threshold} مرة:",
+        color=0xff5555
+    )
+    for name, image_url, count in junked_users:
+        field_value = f"[صورة الحساب]({image_url})" if image_url else "بدون صورة"
+        embed.add_field(
+            name=f"{name} ({count} مرات)",
+            value=field_value,
+            inline=False
+        )
+    await ctx.send(embed=embed)
+
+@bot.command(name='junk_clear')
+async def junk_clear_command(ctx):
+    channel_id = ctx.channel.id
+    guild_id = ctx.guild.id if ctx.guild else 0
+    keys_to_remove = [k for k in junked_users_info.keys() if k[0] == guild_id and k[1] == channel_id]
+    for k in keys_to_remove:
+        del junked_users_info[k]
+    await ctx.send("✅ تم تصفير قائمة الـ junk لهذا الروم بنجاح.")
+
+# ... باقي الكود كما هو ...
 
 async def main():
     keep_alive()
