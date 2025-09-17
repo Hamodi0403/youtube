@@ -37,35 +37,47 @@ log_message_counts = defaultdict(int)  # NEW
 user_message_numbers = defaultdict(dict)  # key: (guild_id, channel_id, author_name) -> dict: {message_content: message_number}
 
 # ============================================================
-#              تخزين الأشخاص اللي ظهروا كتير في اللوجز (دائم)
+#              تخزين الأشخاص اللي ظهروا كتير في اللوجز (مؤقت لكل بث)
 # ============================================================
 JUNKED_USERS_FILE = "junked_users.json"
-junked_users_info = defaultdict(lambda: {"count": 0, "author_name": None, "author_image": None})
+JUNK_EXPIRE_SECONDS = 8 * 60 * 60  # 8 ساعات
+
+# هيبقى كده: {video_id: {"users": {author_name: {count, name, image}}, "ended_at": timestamp_or_None}}
+junked_users_data = {}
 
 def load_junked_users():
-    global junked_users_info
+    global junked_users_data
     if os.path.exists(JUNKED_USERS_FILE):
         try:
             with open(JUNKED_USERS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                junked_users_info = defaultdict(
-                    lambda: {"count": 0, "author_name": None, "author_image": None},
-                    {tuple(json.loads(k)): v for k, v in data.items()}
-                )
+                junked_users_data = json.load(f)
         except Exception:
-            pass
+            junked_users_data = {}
 
 def save_junked_users():
-    # نحول الـ keys من tuple إلى list عشان json
-    data = {json.dumps(list(k)): v for k, v in junked_users_info.items()}
     try:
         with open(JUNKED_USERS_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(junked_users_data, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
-# تحميل القائمة عند بدء البوت
-load_junked_users()
+def clear_expired_junk():
+    now = time.time()
+    changed = False
+    for vid, info in list(junked_users_data.items()):
+        ended_at = info.get("ended_at")
+        if ended_at and now - ended_at > JUNK_EXPIRE_SECONDS:
+            junked_users_data[vid]["users"] = {}
+            junked_users_data[vid]["ended_at"] = None
+            changed = True
+    if changed:
+        save_junked_users()
+
+def get_current_video_id(channel_id):
+    chat_data = active_chats.get(channel_id)
+    if chat_data and chat_data.get("video_id"):
+        return chat_data["video_id"]
+    return None
 
 # ============================================================
 #                   إعدادات الفلاتر/العَتبات
@@ -168,19 +180,27 @@ def extract_video_id(text):
 # ============================================================
 #                     دالة اللوجز المعدلة
 # ============================================================
+def log_junk_user(video_id, author_name, author_image):
+    if video_id not in junked_users_data:
+        junked_users_data[video_id] = {"users": {}, "ended_at": None}
+    u = junked_users_data[video_id]["users"].setdefault(author_name, {
+        "count": 0, "author_name": author_name, "author_image": author_image
+    })
+    u["count"] += 1
+    u["author_name"] = author_name
+    if author_image:
+        u["author_image"] = author_image
+    save_junked_users()
+
 async def log_message(ctx, reason, author_name, content, extra: dict = None, author_image=None):
     log_channel = bot.get_channel(LOG_CHANNEL_ID)
     if not log_channel:
         return
     channel_id = ctx.channel.id if ctx and hasattr(ctx, 'channel') else LOG_CHANNEL_ID
 
-    # نخزن الشخص بشكل عالمي (بدون ربط بالروم أو السيرفر)
-    key = (author_name,)
-    junked_users_info[key]["count"] += 1
-    junked_users_info[key]["author_name"] = author_name
-    if author_image:
-        junked_users_info[key]["author_image"] = author_image
-    save_junked_users()
+    video_id = get_current_video_id(channel_id)
+    if video_id:
+        log_junk_user(video_id, author_name, author_image)
 
     log_message_counts[channel_id] += 1
     log_count = log_message_counts[channel_id]
@@ -233,6 +253,7 @@ async def global_check(ctx):
 @bot.event
 async def on_ready():
     load_junked_users()
+    clear_expired_junk()
     print(f'✅ {bot.user} متصل بـ Discord!')
     print(f'🔗 البوت موجود في {len(bot.guilds)} سيرفر')
     print(f'🆔 Bot ID: {bot.user.id}')
@@ -276,6 +297,10 @@ async def start_youtube_chat(ctx, video_id: str = None):
         for k in keys_to_remove:
             del d[k]
     log_message_counts[channel_id] = 0
+
+    # عند بدء بث جديد نصفر قائمة junk لهذا البث
+    junked_users_data[video_id] = {"users": {}, "ended_at": None}
+    save_junked_users()
 
     await ctx.send(f'🔄 محاولة الاتصال بـ YouTube Live Chat...\n📺 Video ID: `{video_id}`')
     try:
@@ -495,6 +520,11 @@ async def monitor_youtube_chat(ctx, channel_id):
             for k in keys_to_remove:
                 del d[k]
         log_message_counts[channel_id] = 0
+        # عند انتهاء البث سجل وقت الانتهاء
+        video_id = chat_data["video_id"] if chat_data else None
+        if video_id and video_id in junked_users_data:
+            junked_users_data[video_id]["ended_at"] = time.time()
+            save_junked_users()
         if ended_by_stream:
             try:
                 await ctx.send("# 📴 **تم إيقاف البوت تلقائيًا لأن البث انتهى.**")
@@ -610,8 +640,8 @@ async def commands_help(ctx):
     `!status` - عرض تفاصيل حالة البوت
     `!explain` - شرح ازاي تجيب الاي دي
     `!commands` - عرض قائمة المساعدة الكاملة
-    `!junk` - عرض قائمة الأشخاص المخربين
-    `!junk_clear` - تصفير قائمة الأشخاص المخربين
+    `!junk` - عرض قائمة الأشخاص المخربين للبث الحالي
+    `!junk_clear` - تصفير قائمة الأشخاص المخربين للبث الحالي
     """
     embed.add_field(name="📋 الأوامر المتاحة", value=commands_text, inline=False)
     commands_appearance = """
@@ -632,36 +662,41 @@ async def commands_help(ctx):
     await ctx.send(embed=embed)
 
 # ============================================================
-#             أوامر junk و junk_clear المضافة حديثاً
+#             أوامر junk و junk_clear (مؤقت للبث الحالي)
 # ============================================================
 @bot.command(name='junk')
 async def junk_command(ctx):
-    threshold = 8
-    junked_users = [
-        (info["author_name"], info["author_image"], info["count"])
-        for key, info in junked_users_info.items()
-        if info["count"] >= threshold
-    ]
-
+    clear_expired_junk()
+    video_id = get_current_video_id(ctx.channel.id)
+    if not video_id or video_id not in junked_users_data:
+        await ctx.send("لا يوجد قائمة مخربين لهذا البث حالياً.")
+        return
+    threshold = 15
+    users = junked_users_data[video_id]["users"]
+    junked_users = [u for u in users.values() if u["count"] >= threshold]
     if not junked_users:
         await ctx.send("✅ لا يوجد أشخاص صنفوا كـ junk حتى الآن.")
         return
-
-    for name, image_url, count in junked_users:
+    for u in junked_users:
         embed = discord.Embed(
             title="🚫 شخص صنف Junk",
-            description=f"**{name}**\nظهر في اللوجز: {count} مرة",
+            description=f"**{u['author_name']}**\nظهر في اللوجز: {u['count']} مرة",
             color=0xff5555
         )
-        if image_url:
-            embed.set_thumbnail(url=image_url)
+        if u["author_image"]:
+            embed.set_thumbnail(url=u["author_image"])
         await ctx.send(embed=embed)
 
 @bot.command(name='junk_clear')
 async def junk_clear_command(ctx):
-    junked_users_info.clear()
+    video_id = get_current_video_id(ctx.channel.id)
+    if not video_id or video_id not in junked_users_data:
+        await ctx.send("لا يوجد قائمة لهذا البث.")
+        return
+    junked_users_data[video_id]["users"] = {}
+    junked_users_data[video_id]["ended_at"] = None
     save_junked_users()
-    await ctx.send("✅ تم تصفير قائمة الـ junk بنجاح.")
+    await ctx.send("✅ تم تصفير قائمة الـ junk لهذا البث بنجاح.")
 
 # ============================================================
 #                     Main Loop
