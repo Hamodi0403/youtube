@@ -527,7 +527,7 @@ async def monitor_youtube_chat(ctx, channel_id):
             save_junked_users()
 
             # ========= إرسال قائمة الـ junk تلقائيًا قبل رسالة الإيقاف =========
-            threshold = 8
+            threshold = 15
             users = junked_users_data[video_id]["users"]
             junked_users = [u for u in users.values() if u["count"] >= threshold]
             if junked_users:
