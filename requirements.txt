@@ -1,4 +1,4 @@
 discord.py
-pytchat
+yt-live-chat
 flask
 rapidfuzz
