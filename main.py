@@ -309,7 +309,7 @@ async def start_youtube_chat(ctx, video_id: str = None):
     await ctx.send(f'🔄 محاولة الاتصال بـ YouTube Live Chat...\n📺 Video ID: `{video_id}`')
     try:
         chat = YouTubeLiveChat(video_id)
-        if not chat.is_alive():
+        if not chat.is_live():
             await ctx.send("❌ الفيديو موجود بس البث مش مباشر حالياً!")
             return
 
@@ -365,8 +365,7 @@ async def monitor_youtube_chat(ctx, channel_id):
                 for _ in range(PROBE_ATTEMPTS):
                     await asyncio.sleep(PROBE_SLEEP_SEC)
                     try:
-                        probe = await loop.run_in_executor(None, chat.get)
-                        probe_items = probe.sync_items()
+                        probe_items = await loop.run_in_executor(None, chat.get_new_messages)
                         if probe_items:
                             items = probe_items
                             probe_found = True
@@ -377,7 +376,7 @@ async def monitor_youtube_chat(ctx, channel_id):
                     recreated = False
                     for _ in range(RECREATE_ATTEMPTS):
                         try:
-                            new_chat = pytchat.create(video_id=video_id)
+                            new_chat = YouTubeLiveChat(video_id)
                             if new_chat and new_chat.is_alive():
                                 chat = new_chat
                                 chat_data['chat'] = new_chat
@@ -395,8 +394,7 @@ async def monitor_youtube_chat(ctx, channel_id):
                 for _ in range(PROBE_ATTEMPTS):
                     await asyncio.sleep(PROBE_SLEEP_SEC)
                     try:
-                        probe = await loop.run_in_executor(None, chat.get)
-                        probe_items = probe.sync_items()
+                        probe_items = await loop.run_in_executor(None, chat.get_new_messages)                      
                         if probe_items:
                             items = probe_items
                             probe_found = True
@@ -408,7 +406,7 @@ async def monitor_youtube_chat(ctx, channel_id):
                     recreated = False
                     for _ in range(RECREATE_ATTEMPTS):
                         try:
-                            new_chat = pytchat.create(video_id=video_id)
+                            new_chat = YouTubeLiveChat(video_id)
                             if new_chat and new_chat.is_alive():
                                 chat = new_chat
                                 chat_data['chat'] = new_chat
@@ -446,7 +444,7 @@ async def monitor_youtube_chat(ctx, channel_id):
                         "Rate Limit", 
                         author_name, 
                         message_content,
-                        author_image=getattr(c.author, 'imageUrl', None)
+                        author_image=c.get("author", {}).get("imageUrl")
                     )
                     continue
 
@@ -472,7 +470,7 @@ async def monitor_youtube_chat(ctx, channel_id):
                         author_name, 
                         message_content, 
                         {**(debug_info or {}), "similar_message_number": similar_message_number},
-                        author_image=getattr(c.author, 'imageUrl', None)
+                        author_image=c.get("author", {}).get("imageUrl")
                     )
                     continue
 
@@ -494,11 +492,11 @@ async def monitor_youtube_chat(ctx, channel_id):
 
                     embed = discord.Embed(
                         title="🎬 **YouTube Live Chat**",
-                        description=f"### 👤 **{c.author.name}**\n\n### 💬 {fix_mixed_text(msg_display)}",
+                        description=f"### 👤 **{author_name}**\n\n### 💬 {fix_mixed_text(msg_display)}",
                         color=0xff0000,
                         timestamp=timestamp
                     )
-                    if hasattr(c.author, 'imageUrl') and c.get("author", {}).get("imageUrl"):
+                    if c.get("author", {}).get("imageUrl"): and c.get("author", {}).get("imageUrl"):
                         embed.set_thumbnail(url=c.get("author", {}).get("imageUrl"))
                     embed.set_footer(
                         text=f"📺 YouTube Live Chat • رسالة #{message_count}",
