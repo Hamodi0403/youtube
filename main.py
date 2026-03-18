@@ -4,7 +4,7 @@ import asyncio
 import os
 import json
 from keep_alive import keep_alive
-import pytchat
+from yt_live_chat import YouTubeLiveChat
 from datetime import datetime
 import re
 from rapidfuzz import fuzz
@@ -308,7 +308,7 @@ async def start_youtube_chat(ctx, video_id: str = None):
 
     await ctx.send(f'🔄 محاولة الاتصال بـ YouTube Live Chat...\n📺 Video ID: `{video_id}`')
     try:
-        chat = pytchat.create(video_id=video_id)
+        chat = YouTubeLiveChat(video_id)
         if not chat.is_alive():
             await ctx.send("❌ الفيديو موجود بس البث مش مباشر حالياً!")
             return
@@ -357,9 +357,8 @@ async def monitor_youtube_chat(ctx, channel_id):
         while chat_data.get('running', False):
             loop = asyncio.get_event_loop()
             items = None
-            try:
-                chat_data_result = await loop.run_in_executor(None, chat.get)
-                items = chat_data_result.sync_items()
+            try:                
+                items = await loop.run_in_executor(None, chat.get_new_messages)
                 reconnect_attempts = 0
             except Exception:
                 probe_found = False
@@ -432,9 +431,9 @@ async def monitor_youtube_chat(ctx, channel_id):
             for c in items:
                 if not chat_data.get('running', False):
                     break
-                message_content_raw = c.message if c.message else ""
+                message_content_raw = c.get("message", "")
                 message_content = message_content_raw.strip()
-                author_name = c.author.name
+                author_name = c.get("author", {}).get("name", "Unknown")
                 key = (ctx.guild.id if ctx.guild else 0, ctx.channel.id, author_name)
                 now = time.time()
                 times = user_message_times[key]
@@ -483,7 +482,7 @@ async def monitor_youtube_chat(ctx, channel_id):
 
                 try:
                     try:
-                        timestamp = datetime.fromisoformat(c.datetime.replace('Z', '+00:00')) if c.datetime else datetime.now()
+                        timestamp = datetime.fromisoformat(c.get("timestamp").replace('Z', '+00:00')) if c.get("timestamp") else datetime.now()
                     except:
                         timestamp = datetime.now()
 
@@ -499,8 +498,8 @@ async def monitor_youtube_chat(ctx, channel_id):
                         color=0xff0000,
                         timestamp=timestamp
                     )
-                    if hasattr(c.author, 'imageUrl') and c.author.imageUrl:
-                        embed.set_thumbnail(url=c.author.imageUrl)
+                    if hasattr(c.author, 'imageUrl') and c.get("author", {}).get("imageUrl"):
+                        embed.set_thumbnail(url=c.get("author", {}).get("imageUrl"))
                     embed.set_footer(
                         text=f"📺 YouTube Live Chat • رسالة #{message_count}",
                         icon_url="https://upload.wikimedia.org/wikipedia/commons/4/42/YouTube_icon_%282013-2017%29.png"
