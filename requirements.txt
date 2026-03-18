@@ -1,4 +1,1 @@
-discord.py
-pytchat
-flask
-rapidfuzz
+pytchat>=0.5.5
