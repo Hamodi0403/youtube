@@ -4,7 +4,7 @@ import asyncio
 import os
 import json
 from keep_alive import keep_alive
-from yt_live_chat import YouTubeLiveChat
+import pytchat
 from datetime import datetime
 import re
 from rapidfuzz import fuzz
@@ -175,7 +175,7 @@ def extract_video_id(text):
         match = re.search(pattern, text)
         if match:
             return match.group(1)
-    return None
+    return text.strip()
 
 # ============================================================
 #                     دالة اللوجز المعدلة
@@ -287,10 +287,6 @@ async def start_youtube_chat(ctx, video_id: str = None):
         return
 
     video_id = extract_video_id(video_id)
-
-    if not video_id:
-        await ctx.send("❌ اللينك أو الـ Video ID غير صحيح")
-        return
     channel_id = ctx.channel.id
     if channel_id in active_chats:
         await ctx.send("⚠️ يوجد شات نشط بالفعل! استخدم `!stop` لإيقافه.")
@@ -308,8 +304,8 @@ async def start_youtube_chat(ctx, video_id: str = None):
 
     await ctx.send(f'🔄 محاولة الاتصال بـ YouTube Live Chat...\n📺 Video ID: `{video_id}`')
     try:
-        chat = YouTubeLiveChat(video_id)
-        if not chat.is_live():
+        chat = pytchat.create(video_id=video_id)
+        if not chat.is_alive():
             await ctx.send("❌ الفيديو موجود بس البث مش مباشر حالياً!")
             return
 
@@ -357,15 +353,17 @@ async def monitor_youtube_chat(ctx, channel_id):
         while chat_data.get('running', False):
             loop = asyncio.get_event_loop()
             items = None
-            try:                
-                items = await loop.run_in_executor(None, chat.get_new_messages)
+            try:
+                chat_data_result = await loop.run_in_executor(None, chat.get)
+                items = chat_data_result.sync_items()
                 reconnect_attempts = 0
             except Exception:
                 probe_found = False
                 for _ in range(PROBE_ATTEMPTS):
                     await asyncio.sleep(PROBE_SLEEP_SEC)
                     try:
-                        probe_items = await loop.run_in_executor(None, chat.get_new_messages)
+                        probe = await loop.run_in_executor(None, chat.get)
+                        probe_items = probe.sync_items()
                         if probe_items:
                             items = probe_items
                             probe_found = True
@@ -376,7 +374,7 @@ async def monitor_youtube_chat(ctx, channel_id):
                     recreated = False
                     for _ in range(RECREATE_ATTEMPTS):
                         try:
-                            new_chat = YouTubeLiveChat(video_id)
+                            new_chat = pytchat.create(video_id=video_id)
                             if new_chat and new_chat.is_alive():
                                 chat = new_chat
                                 chat_data['chat'] = new_chat
@@ -394,7 +392,8 @@ async def monitor_youtube_chat(ctx, channel_id):
                 for _ in range(PROBE_ATTEMPTS):
                     await asyncio.sleep(PROBE_SLEEP_SEC)
                     try:
-                        probe_items = await loop.run_in_executor(None, chat.get_new_messages)                      
+                        probe = await loop.run_in_executor(None, chat.get)
+                        probe_items = probe.sync_items()
                         if probe_items:
                             items = probe_items
                             probe_found = True
@@ -406,7 +405,7 @@ async def monitor_youtube_chat(ctx, channel_id):
                     recreated = False
                     for _ in range(RECREATE_ATTEMPTS):
                         try:
-                            new_chat = YouTubeLiveChat(video_id)
+                            new_chat = pytchat.create(video_id=video_id)
                             if new_chat and new_chat.is_alive():
                                 chat = new_chat
                                 chat_data['chat'] = new_chat
@@ -429,9 +428,9 @@ async def monitor_youtube_chat(ctx, channel_id):
             for c in items:
                 if not chat_data.get('running', False):
                     break
-                message_content_raw = c.get("message", "")
+                message_content_raw = c.message if c.message else ""
                 message_content = message_content_raw.strip()
-                author_name = c.get("author", {}).get("name", "Unknown")
+                author_name = c.author.name
                 key = (ctx.guild.id if ctx.guild else 0, ctx.channel.id, author_name)
                 now = time.time()
                 times = user_message_times[key]
@@ -444,7 +443,7 @@ async def monitor_youtube_chat(ctx, channel_id):
                         "Rate Limit", 
                         author_name, 
                         message_content,
-                        author_image=c.get("author", {}).get("imageUrl")
+                        author_image=getattr(c.author, 'imageUrl', None)
                     )
                     continue
 
@@ -470,7 +469,7 @@ async def monitor_youtube_chat(ctx, channel_id):
                         author_name, 
                         message_content, 
                         {**(debug_info or {}), "similar_message_number": similar_message_number},
-                        author_image=c.get("author", {}).get("imageUrl")
+                        author_image=getattr(c.author, 'imageUrl', None)
                     )
                     continue
 
@@ -480,7 +479,7 @@ async def monitor_youtube_chat(ctx, channel_id):
 
                 try:
                     try:
-                        timestamp = datetime.fromisoformat(c.get("timestamp").replace('Z', '+00:00')) if c.get("timestamp") else datetime.now()
+                        timestamp = datetime.fromisoformat(c.datetime.replace('Z', '+00:00')) if c.datetime else datetime.now()
                     except:
                         timestamp = datetime.now()
 
@@ -492,12 +491,12 @@ async def monitor_youtube_chat(ctx, channel_id):
 
                     embed = discord.Embed(
                         title="🎬 **YouTube Live Chat**",
-                        description=f"### 👤 **{author_name}**\n\n### 💬 {fix_mixed_text(msg_display)}",
+                        description=f"### 👤 **{c.author.name}**\n\n### 💬 {fix_mixed_text(msg_display)}",
                         color=0xff0000,
                         timestamp=timestamp
                     )
-                    if c.get("author", {}).get("imageUrl"): and c.get("author", {}).get("imageUrl"):
-                        embed.set_thumbnail(url=c.get("author", {}).get("imageUrl"))
+                    if hasattr(c.author, 'imageUrl') and c.author.imageUrl:
+                        embed.set_thumbnail(url=c.author.imageUrl)
                     embed.set_footer(
                         text=f"📺 YouTube Live Chat • رسالة #{message_count}",
                         icon_url="https://upload.wikimedia.org/wikipedia/commons/4/42/YouTube_icon_%282013-2017%29.png"
