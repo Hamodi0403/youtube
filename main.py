@@ -175,7 +175,7 @@ def extract_video_id(text):
         match = re.search(pattern, text)
         if match:
             return match.group(1)
-    return text.strip()
+    return None
 
 # ============================================================
 #                     دالة اللوجز المعدلة
@@ -287,6 +287,10 @@ async def start_youtube_chat(ctx, video_id: str = None):
         return
 
     video_id = extract_video_id(video_id)
+
+    if not video_id:
+        await ctx.send("❌ اللينك أو الـ Video ID غير صحيح")
+        return
     channel_id = ctx.channel.id
     if channel_id in active_chats:
         await ctx.send("⚠️ يوجد شات نشط بالفعل! استخدم `!stop` لإيقافه.")
