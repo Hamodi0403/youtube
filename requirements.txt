@@ -1,4 +1,4 @@
 discord.py
-pytchat>=0.5.5
+Pytchat
 flask
 rapidfuzz
