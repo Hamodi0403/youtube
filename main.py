@@ -223,7 +223,7 @@ async def log_message(ctx, reason, author_name, content, extra: dict = None, aut
         if 'similar_message_number' in extra and extra['similar_message_number']:
             embed.add_field(
                 name="🔁 مكررة من رسالة رقم",
-                value=f"الرسالة الأصلية كانت رقم #{extra['similar_message_number']}",
+                value=f"[الرسالة الأصلية كانت رقم #{extra['similar_message_number']}](https://discord.com/channels/{ctx.guild.id}/{ctx.channel.id}/{extra['similar_message_number']})"
                 inline=False
             )
     embed.set_footer(text=f"📺 YouTube Chat Logger • رسالة #{log_count}")
@@ -318,7 +318,7 @@ async def start_youtube_chat(ctx, video_id: str = None):
         )
         embed.add_field(name="📺 Video ID", value=video_id, inline=True)
         embed.add_field(name="📍 روم Discord", value=ctx.channel.mention, inline=True)
-        embed.set_footer(text="© 2025 Ahmed Magdy")
+        embed.set_footer(text="© 2026 Ahmed Magdy")
         await ctx.send(embed=embed)
 
         bot.loop.create_task(monitor_youtube_chat(ctx, channel_id))
@@ -568,7 +568,7 @@ async def stop_youtube_chat(ctx):
         description="تم إيقاف نقل الرسائل",
         color=0xffa500
     )
-    embed.set_footer(text="© 2025 Ahmed Magdy", icon_url="https://cdn.discordapp.com/emojis/741243683501817978.png")
+    embed.set_footer(text="© 2026 Ahmed Magdy", icon_url="https://cdn.discordapp.com/emojis/741243683501817978.png")
     await ctx.send(embed=embed)
 
 @bot.command(name='status')
@@ -584,7 +584,7 @@ async def status(ctx):
     if active_count > 0:
         channels = [f"<#{channel_id}>" for channel_id in active_chats.keys()]
         embed.add_field(name="📍 الرومات النشطة", value="\n".join(channels), inline=False)
-    embed.set_footer(text="© 2025 Ahmed Magdy", icon_url="https://cdn.discordapp.com/emojis/741243683501817978.png")
+    embed.set_footer(text="© 2026 Ahmed Magdy", icon_url="https://cdn.discordapp.com/emojis/741243683501817978.png")
     await ctx.send(embed=embed)
 
 @bot.command(name='change_name')
@@ -675,7 +675,7 @@ async def commands_help(ctx):
                         "• البوت يدعم الرسائل العربية والإنجليزية\n"
                         "• 🌟 تحديث جديد : يمكنك الان استخدام لينك بدل من الاعتماد على الاي دي فقط 🌟", 
                    inline=False)
-    embed.set_footer(text="© 2025 Ahmed Magdy - جميع الحقوق محفوظة", 
+    embed.set_footer(text="© 2026 Ahmed Magdy - جميع الحقوق محفوظة", 
                     icon_url="https://cdn.discordapp.com/emojis/741243683501817978.png")
     await ctx.send(embed=embed)
 
