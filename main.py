@@ -175,7 +175,7 @@ def extract_video_id(text):
         match = re.search(pattern, text)
         if match:
             return match.group(1)
-    return text.strip()
+    return None
 
 # ============================================================
 #                     دالة اللوجز المعدلة
@@ -287,6 +287,10 @@ async def start_youtube_chat(ctx, video_id: str = None):
         return
 
     video_id = extract_video_id(video_id)
+
+    if not video_id:
+        await ctx.send("❌ اللينك أو الـ Video ID غير صحيح")
+        return
     channel_id = ctx.channel.id
     if channel_id in active_chats:
         await ctx.send("⚠️ يوجد شات نشط بالفعل! استخدم `!stop` لإيقافه.")
@@ -527,7 +531,7 @@ async def monitor_youtube_chat(ctx, channel_id):
             save_junked_users()
 
             # ========= إرسال قائمة الـ junk تلقائيًا قبل رسالة الإيقاف =========
-            threshold = 26
+            threshold = 15
             users = junked_users_data[video_id]["users"]
             junked_users = [u for u in users.values() if u["count"] >= threshold]
             if junked_users:
@@ -689,7 +693,7 @@ async def junk_command(ctx):
     if not video_id or video_id not in junked_users_data:
         await ctx.send("لا يوجد بث حالياً لكي يعرض قائمة المخربين.")
         return
-    threshold = 26
+    threshold = 15
     users = junked_users_data[video_id]["users"]
     junked_users = [u for u in users.values() if u["count"] >= threshold]
     if not junked_users:
