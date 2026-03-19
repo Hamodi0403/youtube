@@ -221,9 +221,10 @@ async def log_message(ctx, reason, author_name, content, extra: dict = None, aut
         if details:
             embed.add_field(name="Similarity", value=", ".join(str(x) for x in details), inline=False)
         if 'similar_message_number' in extra and extra['similar_message_number']:
+            link = f"https://discord.com/channels/{ctx.guild.id}/{ctx.channel.id}/{extra['similar_message_id']}"
             embed.add_field(
                 name="🔁 مكررة من رسالة رقم",
-                value=f"[الرسالة الأصلية كانت رقم #{extra['similar_message_number']}](https://discord.com/channels/{ctx.guild.id}/{ctx.channel.id}/{extra['similar_message_number']})",
+                value=f"[الرسالة الأصلية كانت رقم #{extra['similar_message_number']}]({link})",
                 inline=False
             )
     embed.set_footer(text=f"📺 YouTube Chat Logger • رسالة #{log_count}")
